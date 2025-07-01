@@ -1,11 +1,10 @@
-const { Telegraf } = require('telegraf');
-const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+import { Telegraf } from 'telegraf';
+import fetch from 'node-fetch';
 
-// Replace with your real bot token
-const BOT_TOKEN = '8001376703:AAE10T4IV7q6hy8eNl1gyuJWDjgKKAoKYVU';
+const BOT_TOKEN = process.env.BOT_TOKEN;
 const bot = new Telegraf(BOT_TOKEN);
 
-bot.start((ctx) => ctx.reply('Welcome! Send /price to get the current TICS stats.'));
+bot.start((ctx) => ctx.reply('Welcome! Send /price to get TICS stats.'));
 
 bot.command('price', async (ctx) => {
   try {
@@ -25,18 +24,15 @@ Price: \`$${price}\`
 _Source: MEXC_
     `.trim();
 
-    await ctx.reply(message, {
+    ctx.reply(message, {
       parse_mode: 'Markdown',
       reply_to_message_id: ctx.message.message_id
     });
-
   } catch (err) {
-    console.error("Error fetching price:", err);
-    await ctx.reply('❌ Failed to fetch TICS price.', {
-      reply_to_message_id: ctx.message.message_id
-    });
+    ctx.reply('❌ Failed to fetch price.');
+    console.error(err);
   }
 });
 
 bot.launch();
-console.log("✅ TICS bot is running...");
+console.log('✅ TICS Bot running...');
