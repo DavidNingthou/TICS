@@ -169,9 +169,9 @@ bot.command('price', async (ctx) => {
     const message = `
 💰 *TICS / USDT*
 
-💵 \`$${data.price}\`
-📊 ${data.change >= 0 ? '📈 +' : '📉 '}${data.change}%
-📈 \`${data.volume} TICS\`
+💵 Price: \`${data.price}\`
+📊 24h Change: ${data.change >= 0 ? '📈 +' : '📉 '}${data.change}%
+📈 24h Volume: \`${data.volume} TICS\`
 
 *MEXC* ${cacheAge > 0 ? `• ${cacheAge}s` : '• Live'}
     `.trim();
