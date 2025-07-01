@@ -5,57 +5,98 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const bot = new Telegraf(BOT_TOKEN);
 
 // Cache configuration
-const CACHE_DURATION = 5000; // 5 seconds
+const CACHE_DURATION = 5000; // 5 seconds as requested
+const RATE_LIMIT_WINDOW = 10000; // 10 seconds
+const MAX_REQUESTS_PER_USER = 3; // Max 3 requests per 10 seconds per user
+
+// Cache and rate limiting
 let priceCache = {
   data: null,
   timestamp: 0,
   isLoading: false
 };
-
-// Queue to handle concurrent requests
 let pendingRequests = [];
+const userRateLimit = new Map(); // userId -> { count, resetTime }
 
-// Function to fetch price data with caching
+// Rate limiting function
+function isRateLimited(userId) {
+  const now = Date.now();
+  const userLimit = userRateLimit.get(userId);
+  
+  if (!userLimit || now > userLimit.resetTime) {
+    // Reset or create new limit window
+    userRateLimit.set(userId, {
+      count: 1,
+      resetTime: now + RATE_LIMIT_WINDOW
+    });
+    return false;
+  }
+  
+  if (userLimit.count >= MAX_REQUESTS_PER_USER) {
+    return true; // Rate limited
+  }
+  
+  userLimit.count++;
+  return false;
+}
+
+// Cleanup old rate limit entries
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, limit] of userRateLimit.entries()) {
+    if (now > limit.resetTime) {
+      userRateLimit.delete(userId);
+    }
+  }
+}, RATE_LIMIT_WINDOW);
+
+// Enhanced async fetch with better error handling
 async function fetchTicsPrice() {
   const now = Date.now();
   
-  // Return cached data if still fresh
+  // Return cached data if fresh
   if (priceCache.data && (now - priceCache.timestamp) < CACHE_DURATION) {
     return priceCache.data;
   }
   
-  // If already loading, wait for the current request
+  // If loading, queue the request
   if (priceCache.isLoading) {
     return new Promise((resolve, reject) => {
       pendingRequests.push({ resolve, reject });
+      
+      // Timeout for queued requests
+      setTimeout(() => {
+        const index = pendingRequests.findIndex(req => req.resolve === resolve);
+        if (index > -1) {
+          pendingRequests.splice(index, 1);
+          reject(new Error('Request timeout in queue'));
+        }
+      }, 8000);
     });
   }
   
   priceCache.isLoading = true;
   
   try {
-    console.log('🔄 Fetching fresh TICS data...');
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+    
     const res = await fetch('https://www.mexc.co/open/api/v2/market/ticker?symbol=TICS_USDT', {
-      timeout: 10000 // 10 second timeout
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'TICS-Bot/2.0',
+        'Accept': 'application/json'
+      }
     });
     
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-    }
+    clearTimeout(timeoutId);
+    
+    if (!res.ok) throw new Error(`API Error: ${res.status}`);
     
     const json = await res.json();
-    
-    if (!json.data || !json.data[0]) {
-      throw new Error('Invalid API response format');
-    }
+    if (!json.data?.[0]) throw new Error('Invalid response');
     
     const data = json.data[0];
-    
-    // Validate data
-    if (!data.last || !data.change_rate || !data.volume) {
-      throw new Error('Missing required price data');
-    }
-    
     const formattedData = {
       price: parseFloat(data.last).toFixed(4),
       change: parseFloat(data.change_rate).toFixed(2),
@@ -63,84 +104,76 @@ async function fetchTicsPrice() {
       timestamp: now
     };
     
-    // Update cache
     priceCache.data = formattedData;
     priceCache.timestamp = now;
     
-    // Resolve all pending requests
+    // Resolve all pending
     pendingRequests.forEach(req => req.resolve(formattedData));
     pendingRequests = [];
     
     return formattedData;
     
   } catch (error) {
-    console.error('❌ Error fetching TICS price:', error.message);
-    
-    // Reject all pending requests
+    // Reject all pending
     pendingRequests.forEach(req => req.reject(error));
     pendingRequests = [];
-    
     throw error;
   } finally {
     priceCache.isLoading = false;
   }
 }
 
-// Set bot commands menu
+// Commands setup
 bot.telegram.setMyCommands([
   { command: 'price', description: 'Get current TICS price and stats' },
   { command: 'help', description: 'Show available commands' }
 ]);
 
-bot.start((ctx) => {
-  const welcomeMessage = `
-🎉 *Welcome to TICS Bot!*
-
-Get real-time TICS cryptocurrency data from MEXC exchange.
-
-Send /price to get current stats or /help for all commands.
-  `.trim();
-  
-  ctx.reply(welcomeMessage, { parse_mode: 'Markdown' });
+bot.start(async (ctx) => {
+  await ctx.reply('🎉 *TICS Bot Ready!*\n\nSend /price for current stats.', 
+    { parse_mode: 'Markdown' });
 });
 
-bot.command('help', (ctx) => {
+bot.command('help', async (ctx) => {
   const helpMessage = `
-🤖 *Available Commands:*
+🤖 *Commands:*
+/price - TICS price & stats
+/help - This message
 
-/start - Welcome message
-/price - Get TICS price and stats  
-/help - Show this help message
-
-💡 *Features:*
-• Real-time price data from MEXC
-• Smart caching to reduce API load
-• Fast response times
-
-💬 *Tip:* Use the menu button (/) to see all commands!
+💡 Use menu button (/) for quick access
+⚡ Smart caching for fast responses
   `.trim();
   
-  ctx.reply(helpMessage, { parse_mode: 'Markdown' });
+  await ctx.reply(helpMessage, { parse_mode: 'Markdown' });
 });
 
 bot.command('price', async (ctx) => {
-  // Send "typing" action to show bot is working
-  await ctx.sendChatAction('typing');
+  const userId = ctx.from.id;
+  
+  // Check rate limit
+  if (isRateLimited(userId)) {
+    await ctx.reply('⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
+      parse_mode: 'Markdown',
+      reply_to_message_id: ctx.message.message_id
+    });
+    return;
+  }
+  
+  // Show typing immediately
+  ctx.sendChatAction('typing').catch(() => {});
   
   try {
     const data = await fetchTicsPrice();
-    
     const cacheAge = Math.floor((Date.now() - priceCache.timestamp) / 1000);
-    const cacheIndicator = cacheAge < 5 ? '🟢' : '🟡';
     
     const message = `
 💰 *TICS / USDT*
 
-💵 Price: \`$${data.price}\`
-📊 24h Change: ${data.change >= 0 ? '📈 +' : '📉 '}${data.change}%
-📈 24h Volume: \`${data.volume} TICS\`
+💵 \`$${data.price}\`
+📊 ${data.change >= 0 ? '📈 +' : '📉 '}${data.change}%
+📈 \`${data.volume} TICS\`
 
-${cacheIndicator} *Source: MEXC* ${cacheAge > 0 ? `(${cacheAge}s ago)` : '(live)'}
+*MEXC* ${cacheAge > 0 ? `• ${cacheAge}s` : '• Live'}
     `.trim();
     
     await ctx.reply(message, {
@@ -149,65 +182,85 @@ ${cacheIndicator} *Source: MEXC* ${cacheAge > 0 ? `(${cacheAge}s ago)` : '(live)
     });
     
   } catch (error) {
-    console.error('Error in price command:', error.message);
+    console.error(`Price error for user ${userId}:`, error.message);
     
-    let errorMessage = '❌ *Unable to fetch TICS price*\n\n';
-    
-    if (error.message.includes('timeout')) {
-      errorMessage += '⏱️ Request timed out. Please try again.';
-    } else if (error.message.includes('HTTP')) {
-      errorMessage += '🌐 MEXC API is temporarily unavailable.';
+    let errorMsg = '❌ *Price unavailable*\n\n';
+    if (error.message.includes('timeout') || error.message.includes('abort')) {
+      errorMsg += '⏱️ Request timed out';
+    } else if (error.message.includes('API Error')) {
+      errorMsg += '🌐 Exchange API issue';
     } else {
-      errorMessage += '🔧 Technical issue occurred. Please try again later.';
+      errorMsg += '🔧 Try again in a moment';
     }
     
-    await ctx.reply(errorMessage, { 
+    await ctx.reply(errorMsg, { 
       parse_mode: 'Markdown',
       reply_to_message_id: ctx.message.message_id 
     });
   }
 });
 
-// Handle errors gracefully
-bot.catch((err, ctx) => {
-  console.error('Bot error:', err);
+// Enhanced error handling
+bot.catch(async (err, ctx) => {
+  console.error('Bot error:', err.message);
   
-  // Don't spam user with error messages for every error
-  if (ctx.update.message) {
-    ctx.reply('⚠️ Something went wrong. Please try again.').catch(() => {});
+  // Don't flood users with error messages
+  if (ctx.update.message && !err.message.includes('rate')) {
+    try {
+      await ctx.reply('⚠️ Temporary issue - please retry');
+    } catch (replyError) {
+      console.error('Failed to send error message:', replyError.message);
+    }
   }
 });
 
-// Performance monitoring
-let commandCount = 0;
-bot.use((ctx, next) => {
-  commandCount++;
-  if (commandCount % 100 === 0) {
-    console.log(`📊 Processed ${commandCount} commands`);
+// Message processing queue to prevent blocking
+const messageQueue = [];
+let processingQueue = false;
+
+async function processMessageQueue() {
+  if (processingQueue || messageQueue.length === 0) return;
+  
+  processingQueue = true;
+  
+  while (messageQueue.length > 0) {
+    const { ctx, next } = messageQueue.shift();
+    try {
+      await next();
+    } catch (error) {
+      console.error('Queue processing error:', error.message);
+    }
   }
-  return next();
+  
+  processingQueue = false;
+}
+
+// Queue middleware for high load
+bot.use(async (ctx, next) => {
+  // Process non-command messages immediately
+  if (!ctx.message?.text?.startsWith('/')) {
+    return next();
+  }
+  
+  // Queue command messages during high load
+  if (messageQueue.length > 20) {
+    messageQueue.push({ ctx, next });
+    setImmediate(processMessageQueue);
+  } else {
+    await next();
+  }
 });
 
 bot.launch();
-console.log('✅ TICS Bot running with caching enabled...');
-console.log(`🕒 Cache duration: ${CACHE_DURATION / 1000} seconds`);
+console.log('✅ TICS Bot running with rate limiting');
+console.log(`🕒 Cache: ${CACHE_DURATION/1000}s | Rate: ${MAX_REQUESTS_PER_USER}/${RATE_LIMIT_WINDOW/1000}s per user`);
 
-// Enable graceful stop
-process.once('SIGINT', () => {
-  console.log('🛑 Received SIGINT, stopping bot...');
-  bot.stop('SIGINT');
-});
+// Graceful shutdown
+const shutdown = (signal) => {
+  console.log(`🛑 ${signal} received, stopping bot...`);
+  bot.stop(signal);
+  process.exit(0);
+};
 
-process.once('SIGTERM', () => {
-  console.log('🛑 Received SIGTERM, stopping bot...');
-  bot.stop('SIGTERM');
-});
-
-// Optional: Clear cache periodically to prevent memory issues
-setInterval(() => {
-  const now = Date.now();
-  if (priceCache.data && (now - priceCache.timestamp) > CACHE_DURATION * 2) {
-    priceCache.data = null;
-    console.log('🧹 Cleared old cache data');
-  }
-}, CACHE_DURATION * 2);
+process.once('SIGINT', () => shutdown('SIGINT'));
+process.once('SIGTERM', () => shutdown('SIGTERM'));
