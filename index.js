@@ -18,6 +18,35 @@ let priceCache = {
 let pendingRequests = [];
 const userRateLimit = new Map(); // userId -> { count, resetTime }
 
+// Helper function to safely send reply with slow mode handling
+async function safeReply(ctx, message, options = {}) {
+  try {
+    return await ctx.reply(message, options);
+  } catch (error) {
+    // Check if error is due to slow mode
+    if (error.description && (
+      error.description.includes('Too Many Requests') ||
+      error.description.includes('slow mode') ||
+      error.description.includes('retry after') ||
+      error.code === 429
+    )) {
+      console.log(`Slow mode detected for chat ${ctx.chat?.id}, reacting with sad emoji`);
+      
+      // Try to react with sad emoji instead
+      try {
+        await ctx.react('😢');
+        return null;
+      } catch (reactError) {
+        console.error('Failed to react due to slow mode:', reactError.message);
+        return null;
+      }
+    }
+    
+    // Re-throw other errors
+    throw error;
+  }
+}
+
 // Rate limiting function
 function isRateLimited(userId) {
   const now = Date.now();
@@ -130,7 +159,7 @@ bot.telegram.setMyCommands([
 ]);
 
 bot.start(async (ctx) => {
-  await ctx.reply('🎉 *TICS Bot Ready!*\n\nSend /price for current stats.', 
+  await safeReply(ctx, '🎉 *TICS Bot Ready!*\n\nSend /price for current stats.', 
     { parse_mode: 'Markdown' });
 });
 
@@ -144,7 +173,7 @@ bot.command('help', async (ctx) => {
 
   `.trim();
   
-  await ctx.reply(helpMessage, { parse_mode: 'Markdown' });
+  await safeReply(ctx, helpMessage, { parse_mode: 'Markdown' });
 });
 
 bot.command('price', async (ctx) => {
@@ -152,7 +181,7 @@ bot.command('price', async (ctx) => {
   
   // Check rate limit
   if (isRateLimited(userId)) {
-    await ctx.reply('⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
+    await safeReply(ctx, '⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
       parse_mode: 'Markdown',
       reply_to_message_id: ctx.message.message_id
     });
@@ -176,7 +205,7 @@ bot.command('price', async (ctx) => {
 *MEXC* ${cacheAge > 0 ? `• ${cacheAge}s` : '• Live'}
     `.trim();
     
-    await ctx.reply(message, {
+    await safeReply(ctx, message, {
       parse_mode: 'Markdown',
       reply_to_message_id: ctx.message.message_id
     });
@@ -193,7 +222,7 @@ bot.command('price', async (ctx) => {
       errorMsg += '🔧 Try again in a moment';
     }
     
-    await ctx.reply(errorMsg, { 
+    await safeReply(ctx, errorMsg, { 
       parse_mode: 'Markdown',
       reply_to_message_id: ctx.message.message_id 
     });
@@ -207,7 +236,7 @@ bot.catch(async (err, ctx) => {
   // Don't flood users with error messages
   if (ctx.update.message && !err.message.includes('rate')) {
     try {
-      await ctx.reply('⚠️ Temporary issue - please retry');
+      await safeReply(ctx, '⚠️ Temporary issue - please retry');
     } catch (replyError) {
       console.error('Failed to send error message:', replyError.message);
     }
@@ -252,7 +281,7 @@ bot.use(async (ctx, next) => {
 });
 
 bot.launch();
-console.log('✅ TICS Bot running with rate limiting');
+console.log('✅ TICS Bot running with rate limiting and slow mode handling');
 console.log(`🕒 Cache: ${CACHE_DURATION/1000}s | Rate: ${MAX_REQUESTS_PER_USER}/${RATE_LIMIT_WINDOW/1000}s per user`);
 
 // Graceful shutdown
