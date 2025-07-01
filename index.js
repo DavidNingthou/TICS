@@ -6,7 +6,6 @@ const bot = new Telegraf(BOT_TOKEN);
 
 // Set bot commands menu
 bot.telegram.setMyCommands([
-  { command: 'start', description: 'Start the bot and see welcome message' },
   { command: 'price', description: 'Get current TICS price and stats' },
   { command: 'help', description: 'Show available commands' }
 ]);
