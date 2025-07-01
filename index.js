@@ -5,7 +5,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const bot = new Telegraf(BOT_TOKEN);
 
 // Cache configuration
-const CACHE_DURATION = 5000; // 5 seconds as requested
+const CACHE_DURATION = 5000; // 5 seconds cache duration
 const RATE_LIMIT_WINDOW = 10000; // 10 seconds
 const MAX_REQUESTS_PER_USER = 3; // Max 3 requests per 10 seconds per user
 
@@ -141,7 +141,7 @@ bot.command('help', async (ctx) => {
 /help - This message
 
 💡 Use menu button (/) for quick access
-⚡ Smart caching for fast responses
+
   `.trim();
   
   await ctx.reply(helpMessage, { parse_mode: 'Markdown' });
@@ -170,7 +170,7 @@ bot.command('price', async (ctx) => {
 💰 *TICS / USDT*
 
 💵 Price: \`${data.price}\`
-📊 24h Change: ${data.change >= 0 ? '📈 +' : '📉 '}${data.change}%
+📊 Change Rate: ${data.change >= 0 ? '📈 +' : '📉 '}${data.change}%
 📈 24h Volume: \`${data.volume} TICS\`
 
 *MEXC* ${cacheAge > 0 ? `• ${cacheAge}s` : '• Live'}
