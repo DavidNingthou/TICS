@@ -154,8 +154,8 @@ async function fetchTicsPrice() {
 
 // Commands setup
 bot.telegram.setMyCommands([
-  { command: 'price', description: 'Get current TICS price and stats' },
-  { command: 'help', description: 'Show available commands' }
+  { command: 'price', description: 'Get current TICS price and stats' }
+  
 ]);
 
 bot.start(async (ctx) => {
