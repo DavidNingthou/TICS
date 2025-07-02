@@ -198,7 +198,7 @@ bot.command('price', async (ctx) => {
     const message = `
 🚀 *TICS / USDT*
 
-💎 **Price:** \`${data.price}\`
+💵 **Price:** \`${data.price}\`
 ${data.change >= 0 ? '🟢' : '🔴'} **Change Rate:** ${data.change >= 0 ? '+' : ''}${data.change}%
 📊 **24h Volume:** \`${data.volume} TICS\`
 
