@@ -198,9 +198,9 @@ bot.command('price', async (ctx) => {
     const message = `
 🚀 *TICS / USDT*
 
-💎 **$${data.price}**
-${data.change >= 0 ? '🟢' : '🔴'} **${data.change >= 0 ? '+' : ''}${data.change}%** _24h_
-📊 Volume: \`${data.volume} TICS\`
+💎 **Price:** \`${data.price}\`
+${data.change >= 0 ? '🟢' : '🔴'} **Change Rate:** ${data.change >= 0 ? '+' : ''}${data.change}%
+📊 **24h Volume:** \`${data.volume} TICS\`
 
 ⚡ _Live from MEXC_ ${cacheAge > 0 ? `• ${cacheAge}s ago` : ''}
     `.trim();
@@ -210,11 +210,11 @@ ${data.change >= 0 ? '🟢' : '🔴'} **${data.change >= 0 ? '+' : ''}${data.cha
       inline_keyboard: [
         [
           {
-            text: '🏛️ Trade on MEXC',
+            text: 'Trade on MEXC',
             url: 'https://www.mexc.com/exchange/TICS_USDT'
           },
           {
-            text: '🏦 Trade on LBank',
+            text: 'Trade on LBank',
             url: 'https://www.lbank.com/trade/tics_usdt'
           }
         ]
