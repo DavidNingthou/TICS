@@ -196,18 +196,35 @@ bot.command('price', async (ctx) => {
     const cacheAge = Math.floor((Date.now() - priceCache.timestamp) / 1000);
     
     const message = `
-💰 *TICS / USDT*
+🚀 *TICS / USDT*
 
-💵 Price: \`${data.price}\`
-📊 Change Rate: ${data.change >= 0 ? '📈 +' : '📉 '}${data.change}%
-📈 24h Volume: \`${data.volume} TICS\`
+💎 **$${data.price}**
+${data.change >= 0 ? '🟢' : '🔴'} **${data.change >= 0 ? '+' : ''}${data.change}%** _24h_
+📊 Volume: \`${data.volume} TICS\`
 
-*MEXC* ${cacheAge > 0 ? `• ${cacheAge}s` : '• Live'}
+⚡ _Live from MEXC_ ${cacheAge > 0 ? `• ${cacheAge}s ago` : ''}
     `.trim();
+    
+    // Create inline keyboard with trading buttons
+    const keyboard = {
+      inline_keyboard: [
+        [
+          {
+            text: '🏛️ Trade on MEXC',
+            url: 'https://www.mexc.com/exchange/TICS_USDT'
+          },
+          {
+            text: '🏦 Trade on LBank',
+            url: 'https://www.lbank.com/trade/tics_usdt'
+          }
+        ]
+      ]
+    };
     
     await safeReply(ctx, message, {
       parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id
+      reply_to_message_id: ctx.message.message_id,
+      reply_markup: keyboard
     });
     
   } catch (error) {
