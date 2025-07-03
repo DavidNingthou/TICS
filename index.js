@@ -283,7 +283,7 @@ bot.command('price', async (ctx) => {
 🚀 *TICS / USDT* (Combined)
 
 💵 **Avg Price:** \`${data.price}\`
-📊 **Total Volume:** \`${data.volume.toLocaleString()} TICS\`
+📊 **24h Volume:** \`${data.volume.toLocaleString()} TICS\`
 🟢 **High:** \`${data.high}\` | 🔴 **Low:** \`${data.low}\`
 
 📈 **Exchange Breakdown:**
