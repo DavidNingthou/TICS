@@ -287,8 +287,8 @@ bot.command('price', async (ctx) => {
 🔴 **High:** \`${data.high}\` | 🟢 **Low:** \`${data.low}\`
 
 📈 **Exchange Breakdown:**
-🔸 MEXC: \`${data.mexcPrice}\` (${data.mexcVolume.toLocaleString()}) | H: \`${data.mexcHigh}\` L: \`${data.mexcLow}\`
-🔹 LBank: \`${data.lbankPrice}\` (${data.lbankVolume.toLocaleString()}) | H: \`${data.lbankHigh}\` L: \`${data.lbankLow}\`
+🔸 MEXC: \`${data.mexcPrice}\` (${data.mexcVolume.toLocaleString()}) \`
+🔹 LBank: \`${data.lbankPrice}\` (${data.lbankVolume.toLocaleString()}) \`
 
 ⚡ _Live + ${exchangeData.lbank.connected ? 'Live' : 'REST'}_ ${dataAge > 0 ? `• ${dataAge}s ago` : ''}
     `.trim();
