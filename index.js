@@ -284,7 +284,7 @@ bot.command('price', async (ctx) => {
 
 💵 **Price:** \`${data.price}\`
 📊 **Volume:** \`${data.volume.toLocaleString()} TICS\`
-🔴 **High:** \`${data.high}\` | 🟢 **Low:** \`${data.low}\`
+🟢 **High:** \`${data.high}\` | 🔴 **Low:** \`${data.low}\`
 
 📈 **Exchange Breakdown:**
 🔸 MEXC: \`${data.mexcPrice}\` (${data.mexcVolume.toLocaleString()})
