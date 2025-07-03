@@ -282,16 +282,14 @@ bot.command('price', async (ctx) => {
     const message = `
 🚀 *TICS / USDT* (Combined)
 
-💵 **Price:** \`${data.price}\`
-📊 **Volume:** \`${data.volume.toLocaleString()} TICS\`
+💵 **Avg Price:** \`${data.price}\`
+📊 **Total Volume:** \`${data.volume.toLocaleString()} TICS\`
 🟢 **High:** \`${data.high}\` | 🔴 **Low:** \`${data.low}\`
 
 📈 **Exchange Breakdown:**
 🔸 MEXC: \`${data.mexcPrice}\` (${data.mexcVolume.toLocaleString()})
 🔹 LBank: \`${data.lbankPrice}\` (${data.lbankVolume.toLocaleString()})
-
-⚡ _Live + ${exchangeData.lbank.connected ? 'Live' : 'REST'}_ ${dataAge > 0 ? `• ${dataAge}s ago` : ''}
-    `.trim();
+`.trim();
     
     const keyboard = {
       inline_keyboard: [
