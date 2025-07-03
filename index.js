@@ -1,48 +1,57 @@
 import { Telegraf } from 'telegraf';
 import fetch from 'node-fetch';
+import WebSocket from 'ws';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const bot = new Telegraf(BOT_TOKEN);
 
-// Cache configuration
-const CACHE_DURATION = 5000; // 5 seconds cache duration
+// Rate limiting configuration
 const RATE_LIMIT_WINDOW = 10000; // 10 seconds
 const MAX_REQUESTS_PER_USER = 3; // Max 3 requests per 10 seconds per user
+const userRateLimit = new Map();
 
-// Cache and rate limiting
-let priceCache = {
-  data: null,
-  timestamp: 0,
-  isLoading: false
+// Data storage for both exchanges
+let exchangeData = {
+  mexc: {
+    price: null,
+    volume: null,
+    change: null,
+    timestamp: 0,
+    connected: false
+  },
+  lbank: {
+    price: null,
+    volume: null,
+    change: null,
+    timestamp: 0,
+    connected: false
+  }
 };
-let pendingRequests = [];
-const userRateLimit = new Map(); // userId -> { count, resetTime }
+
+// WebSocket connections
+let lbankWs = null;
+
+// MEXC REST polling (more reliable than their WebSocket for ticker data)
+let mexcPollingInterval = null;
 
 // Helper function to safely send reply with slow mode handling
 async function safeReply(ctx, message, options = {}) {
   try {
     return await ctx.reply(message, options);
   } catch (error) {
-    // Check if error is due to slow mode
     if (error.description && (
       error.description.includes('Too Many Requests') ||
       error.description.includes('slow mode') ||
       error.description.includes('retry after') ||
       error.code === 429
     )) {
-      console.log(`Slow mode detected for chat ${ctx.chat?.id}, reacting with sad emoji`);
-      
-      // Try to react with sad emoji instead
       try {
         await ctx.react('😢');
         return null;
       } catch (reactError) {
-        console.error('Failed to react due to slow mode:', reactError.message);
         return null;
       }
     }
-    
-    // Re-throw other errors
     throw error;
   }
 }
@@ -53,7 +62,6 @@ function isRateLimited(userId) {
   const userLimit = userRateLimit.get(userId);
   
   if (!userLimit || now > userLimit.resetTime) {
-    // Reset or create new limit window
     userRateLimit.set(userId, {
       count: 1,
       resetTime: now + RATE_LIMIT_WINDOW
@@ -62,7 +70,7 @@ function isRateLimited(userId) {
   }
   
   if (userLimit.count >= MAX_REQUESTS_PER_USER) {
-    return true; // Rate limited
+    return true;
   }
   
   userLimit.count++;
@@ -79,107 +87,203 @@ setInterval(() => {
   }
 }, RATE_LIMIT_WINDOW);
 
-// Enhanced async fetch with better error handling
-async function fetchTicsPrice() {
-  const now = Date.now();
-  
-  // Return cached data if fresh
-  if (priceCache.data && (now - priceCache.timestamp) < CACHE_DURATION) {
-    return priceCache.data;
-  }
-  
-  // If loading, queue the request
-  if (priceCache.isLoading) {
-    return new Promise((resolve, reject) => {
-      pendingRequests.push({ resolve, reject });
-      
-      // Timeout for queued requests
-      setTimeout(() => {
-        const index = pendingRequests.findIndex(req => req.resolve === resolve);
-        if (index > -1) {
-          pendingRequests.splice(index, 1);
-          reject(new Error('Request timeout in queue'));
-        }
-      }, 8000);
-    });
-  }
-  
-  priceCache.isLoading = true;
-  
+// MEXC REST API polling
+async function fetchMexcData() {
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
-    
-    const res = await fetch('https://www.mexc.co/open/api/v2/market/ticker?symbol=TICS_USDT', {
-      signal: controller.signal,
+    const response = await fetch('https://www.mexc.co/open/api/v2/market/ticker?symbol=TICS_USDT', {
+      timeout: 5000,
       headers: {
-        'User-Agent': 'TICS-Bot/2.0',
-        'Accept': 'application/json'
+        'User-Agent': 'TICS-Bot/3.0'
       }
     });
     
-    clearTimeout(timeoutId);
+    if (!response.ok) throw new Error(`MEXC API Error: ${response.status}`);
     
-    if (!res.ok) throw new Error(`API Error: ${res.status}`);
+    const data = await response.json();
+    if (data.code === 200 && data.data[0]) {
+      const ticker = data.data[0];
+      exchangeData.mexc = {
+        price: parseFloat(ticker.last).toFixed(4),
+        volume: parseFloat(ticker.volume),
+        change: parseFloat(ticker.change_rate * 100).toFixed(2), // Convert to percentage
+        timestamp: Date.now(),
+        connected: true
+      };
+    }
+  } catch (error) {
+    exchangeData.mexc.connected = false;
+  }
+}
+
+// Start MEXC polling (every 2 seconds for more real-time feel)
+function startMexcPolling() {
+  fetchMexcData(); // Initial fetch
+  mexcPollingInterval = setInterval(fetchMexcData, 2000); // Poll every 2 seconds
+}
+
+// LBank WebSocket Connection
+function connectLBankWebSocket() {
+  try {
+    lbankWs = new WebSocket('wss://www.lbkex.net/ws/V2/');
     
-    const json = await res.json();
-    if (!json.data?.[0]) throw new Error('Invalid response');
+    lbankWs.on('open', () => {
+      console.log('✅ LBank WebSocket connected');
+      exchangeData.lbank.connected = true;
+      
+      // Subscribe to TICS_USDT ticker
+      const subscribeMsg = {
+        action: "subscribe",
+        subscribe: "tick",
+        pair: "tics_usdt"
+      };
+      lbankWs.send(JSON.stringify(subscribeMsg));
+    });
     
-    const data = json.data[0];
-    const formattedData = {
-      price: parseFloat(data.last).toFixed(4),
-      change: parseFloat(data.change_rate).toFixed(2),
-      volume: parseFloat(data.volume).toLocaleString(),
-      timestamp: now
-    };
+    lbankWs.on('message', (data) => {
+      try {
+        const message = JSON.parse(data.toString());
+        
+        // Handle ticker data
+        if (message.type === 'tick' && message.pair === 'tics_usdt' && message.tick) {
+          const tickerData = message.tick;
+          exchangeData.lbank = {
+            price: parseFloat(tickerData.latest).toFixed(4),
+            volume: parseFloat(tickerData.vol),
+            change: parseFloat(tickerData.change).toFixed(2),
+            timestamp: Date.now(),
+            connected: true
+          };
+        }
+      } catch (error) {
+        // Silent error handling
+      }
+    });
     
-    priceCache.data = formattedData;
-    priceCache.timestamp = now;
+    lbankWs.on('close', () => {
+      exchangeData.lbank.connected = false;
+      setTimeout(connectLBankWebSocket, 5000);
+    });
     
-    // Resolve all pending
-    pendingRequests.forEach(req => req.resolve(formattedData));
-    pendingRequests = [];
-    
-    return formattedData;
+    lbankWs.on('error', (error) => {
+      exchangeData.lbank.connected = false;
+    });
     
   } catch (error) {
-    // Reject all pending
-    pendingRequests.forEach(req => req.reject(error));
-    pendingRequests = [];
-    throw error;
-  } finally {
-    priceCache.isLoading = false;
+    setTimeout(connectLBankWebSocket, 5000);
   }
+}
+
+// Fallback REST API function for LBank
+async function fetchLBankREST() {
+  try {
+    const response = await fetch('https://api.lbank.info/v2/ticker.do?symbol=tics_usdt');
+    const data = await response.json();
+    
+    if (data.result === 'true' && data.data[0]) {
+      const ticker = data.data[0].ticker;
+      return {
+        price: parseFloat(ticker.latest).toFixed(4),
+        volume: parseFloat(ticker.vol),
+        change: parseFloat(ticker.change).toFixed(2),
+        timestamp: Date.now()
+      };
+    }
+  } catch (error) {
+    // Silent error handling
+  }
+  return null;
+}
+
+// Get fresh data with fallback
+async function getExchangeData(exchange) {
+  const data = exchangeData[exchange];
+  const now = Date.now();
+  
+  // If data is fresh (less than 30 seconds old), use it
+  if (data.connected && data.price && (now - data.timestamp) < 30000) {
+    return data;
+  }
+  
+  // Otherwise, fall back to REST API (only for LBank)
+  if (exchange === 'lbank') {
+    const restData = await fetchLBankREST();
+    if (restData) {
+      exchangeData.lbank = { ...restData, connected: false };
+      return exchangeData.lbank;
+    }
+  }
+  
+  return null;
+}
+
+// Calculate combined price data
+async function getCombinedData() {
+  // MEXC uses polling, so just get current data
+  const mexcData = exchangeData.mexc.price ? exchangeData.mexc : null;
+  const lbankData = await getExchangeData('lbank');
+  
+  if (!mexcData && !lbankData) {
+    throw new Error('No data available from either exchange');
+  }
+  
+  if (!mexcData) return { ...lbankData, source: 'LBank only' };
+  if (!lbankData) return { ...mexcData, source: 'MEXC only' };
+  
+  // Calculate volume-weighted average price
+  const mexcPrice = parseFloat(mexcData.price);
+  const lbankPrice = parseFloat(lbankData.price);
+  const mexcVol = mexcData.volume;
+  const lbankVol = lbankData.volume;
+  
+  const totalVolume = mexcVol + lbankVol;
+  const weightedPrice = ((mexcPrice * mexcVol) + (lbankPrice * lbankVol)) / totalVolume;
+  
+  // Calculate average change
+  const avgChange = ((parseFloat(mexcData.change) + parseFloat(lbankData.change)) / 2);
+  
+  return {
+    price: weightedPrice.toFixed(4),
+    volume: totalVolume,
+    change: avgChange.toFixed(2),
+    mexcPrice: mexcData.price,
+    lbankPrice: lbankData.price,
+    mexcVolume: mexcVol,
+    lbankVolume: lbankVol,
+    timestamp: Math.max(mexcData.timestamp, lbankData.timestamp),
+    source: 'Combined'
+  };
 }
 
 // Commands setup
 bot.telegram.setMyCommands([
-  { command: 'price', description: 'Get current TICS price and stats' }
-  
+  { command: 'price', description: 'Get combined TICS price from both exchanges' },
+  { command: 'mexc', description: 'Get TICS price from MEXC only' },
+  { command: 'lbank', description: 'Get TICS price from LBank only' }
 ]);
 
 bot.start(async (ctx) => {
-  await safeReply(ctx, '🎉 *TICS Bot Ready!*\n\nSend /price for current stats.', 
+  await safeReply(ctx, '🎉 *TICS Price Bot Ready!*\n\n📊 Commands:\n/price - Combined data from both exchanges\n/mexc - MEXC only\n/lbank - LBank only', 
     { parse_mode: 'Markdown' });
 });
 
 bot.command('help', async (ctx) => {
   const helpMessage = `
-🤖 *Commands:*
-/price - TICS price & stats
-/help - This message
+🤖 *TICS Prics Bot Commands:*
 
-💡 Use menu button (/) for quick access
+📊 /price - Combined price from MEXC + LBank
+🔸 /mexc - MEXC exchange data only  
+🔹 /lbank - LBank exchange data only
+❓ /help - This message
 
   `.trim();
   
   await safeReply(ctx, helpMessage, { parse_mode: 'Markdown' });
 });
 
+// Combined price command
 bot.command('price', async (ctx) => {
   const userId = ctx.from.id;
   
-  // Check rate limit
   if (isRateLimited(userId)) {
     await safeReply(ctx, '⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
       parse_mode: 'Markdown',
@@ -188,35 +292,32 @@ bot.command('price', async (ctx) => {
     return;
   }
   
-  // Show typing immediately
   ctx.sendChatAction('typing').catch(() => {});
   
   try {
-    const data = await fetchTicsPrice();
-    const cacheAge = Math.floor((Date.now() - priceCache.timestamp) / 1000);
+    const data = await getCombinedData();
+    const now = Date.now();
+    const dataAge = Math.floor((now - data.timestamp) / 1000);
     
     const message = `
-🚀 *TICS / USDT*
+🚀 *TICS / USDT* (Combined)
 
-💵 **Price:** \`${data.price}\`
-${data.change >= 0 ? '🟢' : '🔴'} **Change Rate:** ${data.change >= 0 ? '+' : ''}${data.change}%
-📊 **24h Volume:** \`${data.volume} TICS\`
+💵 **Avg Price:** \`${data.price}\`
+${data.change >= 0 ? '🟢' : '🔴'} **Avg Change:** ${data.change >= 0 ? '+' : ''}${data.change}%
+📊 **Total Volume:** \`${data.volume.toLocaleString()} TICS\`
 
-⚡ _Live from MEXC_ ${cacheAge > 0 ? `• ${cacheAge}s ago` : ''}
+📈 **Exchange Breakdown:**
+🔸 MEXC: \`${data.mexcPrice}\` (${data.mexcVolume.toLocaleString()})
+🔹 LBank: \`${data.lbankPrice}\` (${data.lbankVolume.toLocaleString()})
+
+⚡ _Live + ${exchangeData.lbank.connected ? 'Live' : 'REST'}_ ${dataAge > 0 ? `• ${dataAge}s ago` : ''}
     `.trim();
     
-    // Create inline keyboard with trading buttons
     const keyboard = {
       inline_keyboard: [
         [
-          {
-            text: 'Trade on MEXC',
-            url: 'https://www.mexc.com/exchange/TICS_USDT'
-          },
-          {
-            text: 'Trade on LBank',
-            url: 'https://www.lbank.com/trade/tics_usdt'
-          }
+          { text: 'Trade on MEXC', url: 'https://www.mexc.com/exchange/TICS_USDT' },
+          { text: 'Trade on LBank', url: 'https://www.lbank.com/trade/tics_usdt' }
         ]
       ]
     };
@@ -228,18 +329,107 @@ ${data.change >= 0 ? '🟢' : '🔴'} **Change Rate:** ${data.change >= 0 ? '+' 
     });
     
   } catch (error) {
-    console.error(`Price error for user ${userId}:`, error.message);
+    await safeReply(ctx, '❌ *Price unavailable*\n\n🔧 Both exchanges temporarily unavailable', { 
+      parse_mode: 'Markdown',
+      reply_to_message_id: ctx.message.message_id 
+    });
+  }
+});
+
+// MEXC-only command
+bot.command('mexc', async (ctx) => {
+  const userId = ctx.from.id;
+  
+  if (isRateLimited(userId)) {
+    await safeReply(ctx, '⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
+      parse_mode: 'Markdown',
+      reply_to_message_id: ctx.message.message_id
+    });
+    return;
+  }
+  
+  ctx.sendChatAction('typing').catch(() => {});
+  
+  try {
+    const data = exchangeData.mexc;
+    if (!data.price) throw new Error('MEXC data unavailable');
     
-    let errorMsg = '❌ *Price unavailable*\n\n';
-    if (error.message.includes('timeout') || error.message.includes('abort')) {
-      errorMsg += '⏱️ Request timed out';
-    } else if (error.message.includes('API Error')) {
-      errorMsg += '🌐 Exchange API issue';
-    } else {
-      errorMsg += '🔧 Try again in a moment';
-    }
+    const dataAge = Math.floor((Date.now() - data.timestamp) / 1000);
     
-    await safeReply(ctx, errorMsg, { 
+    const message = `
+🔸 *MEXC - TICS/USDT*
+
+💵 **Price:** \`${data.price}\`
+${data.change >= 0 ? '🟢' : '🔴'} **Change:** ${data.change >= 0 ? '+' : ''}${data.change}%
+📊 **Volume:** \`${data.volume.toLocaleString()} TICS\`
+
+⚡ _Live Data (2s)_ ${dataAge > 0 ? `• ${dataAge}s ago` : ''}
+    `.trim();
+    
+    const keyboard = {
+      inline_keyboard: [[
+        { text: 'Trade on MEXC', url: 'https://www.mexc.com/exchange/TICS_USDT' }
+      ]]
+    };
+    
+    await safeReply(ctx, message, {
+      parse_mode: 'Markdown',
+      reply_to_message_id: ctx.message.message_id,
+      reply_markup: keyboard
+    });
+    
+  } catch (error) {
+    await safeReply(ctx, '❌ *MEXC data unavailable*\n\n🔧 Try again in a moment', { 
+      parse_mode: 'Markdown',
+      reply_to_message_id: ctx.message.message_id 
+    });
+  }
+});
+
+// LBank-only command
+bot.command('lbank', async (ctx) => {
+  const userId = ctx.from.id;
+  
+  if (isRateLimited(userId)) {
+    await safeReply(ctx, '⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
+      parse_mode: 'Markdown',
+      reply_to_message_id: ctx.message.message_id
+    });
+    return;
+  }
+  
+  ctx.sendChatAction('typing').catch(() => {});
+  
+  try {
+    const data = await getExchangeData('lbank');
+    if (!data) throw new Error('LBank data unavailable');
+    
+    const dataAge = Math.floor((Date.now() - data.timestamp) / 1000);
+    
+    const message = `
+🔹 *LBank - TICS/USDT*
+
+💵 **Price:** \`${data.price}\`
+${data.change >= 0 ? '🟢' : '🔴'} **Change:** ${data.change >= 0 ? '+' : ''}${data.change}%
+📊 **Volume:** \`${data.volume.toLocaleString()} TICS\`
+
+⚡ _${exchangeData.lbank.connected ? 'Live WebSocket' : 'REST API'}_ ${dataAge > 0 ? `• ${dataAge}s ago` : ''}
+    `.trim();
+    
+    const keyboard = {
+      inline_keyboard: [[
+        { text: 'Trade on LBank', url: 'https://www.lbank.com/trade/tics_usdt' }
+      ]]
+    };
+    
+    await safeReply(ctx, message, {
+      parse_mode: 'Markdown',
+      reply_to_message_id: ctx.message.message_id,
+      reply_markup: keyboard
+    });
+    
+  } catch (error) {
+    await safeReply(ctx, '❌ *LBank data unavailable*\n\n🔧 Try again in a moment', { 
       parse_mode: 'Markdown',
       reply_to_message_id: ctx.message.message_id 
     });
@@ -248,62 +438,36 @@ ${data.change >= 0 ? '🟢' : '🔴'} **Change Rate:** ${data.change >= 0 ? '+' 
 
 // Enhanced error handling
 bot.catch(async (err, ctx) => {
-  console.error('Bot error:', err.message);
-  
-  // Don't flood users with error messages
   if (ctx.update.message && !err.message.includes('rate')) {
     try {
       await safeReply(ctx, '⚠️ Temporary issue - please retry');
     } catch (replyError) {
-      console.error('Failed to send error message:', replyError.message);
+      // Silent error handling
     }
   }
 });
 
-// Message processing queue to prevent blocking
-const messageQueue = [];
-let processingQueue = false;
+// Initialize connections
+startMexcPolling();
+connectLBankWebSocket();
 
-async function processMessageQueue() {
-  if (processingQueue || messageQueue.length === 0) return;
-  
-  processingQueue = true;
-  
-  while (messageQueue.length > 0) {
-    const { ctx, next } = messageQueue.shift();
-    try {
-      await next();
-    } catch (error) {
-      console.error('Queue processing error:', error.message);
-    }
-  }
-  
-  processingQueue = false;
-}
-
-// Queue middleware for high load
-bot.use(async (ctx, next) => {
-  // Process non-command messages immediately
-  if (!ctx.message?.text?.startsWith('/')) {
-    return next();
-  }
-  
-  // Queue command messages during high load
-  if (messageQueue.length > 20) {
-    messageQueue.push({ ctx, next });
-    setImmediate(processMessageQueue);
-  } else {
-    await next();
-  }
-});
-
+// Start the bot
 bot.launch();
-console.log('✅ TICS Bot running with rate limiting and slow mode handling');
-console.log(`🕒 Cache: ${CACHE_DURATION/1000}s | Rate: ${MAX_REQUESTS_PER_USER}/${RATE_LIMIT_WINDOW/1000}s per user`);
+console.log('✅ TICS Multi-Exchange Bot running');
+console.log('📡 MEXC: Live polling (2s) | LBank: WebSocket');
+
+// Health check (reduced frequency)
+setInterval(() => {
+  console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: ${exchangeData.lbank.connected ? '✅' : '❌'}`);
+}, 300000); // Every 5 minutes
 
 // Graceful shutdown
 const shutdown = (signal) => {
   console.log(`🛑 ${signal} received, stopping bot...`);
+  
+  if (mexcPollingInterval) clearInterval(mexcPollingInterval);
+  if (lbankWs) lbankWs.close();
+  
   bot.stop(signal);
   process.exit(0);
 };
