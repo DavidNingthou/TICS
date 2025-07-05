@@ -294,7 +294,7 @@ bot.start(async (ctx) => {
     { parse_mode: 'Markdown' });
 });
 
-bot.command('help', async (ctx) => {
+bot.command(['help', `help@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   const helpMessage = `
 🤖 *TICS Price Bot*
 
@@ -306,7 +306,8 @@ bot.command('help', async (ctx) => {
   await safeReply(ctx, helpMessage, { parse_mode: 'Markdown' });
 });
 
-bot.command('price', async (ctx) => {
+// Handle both /price and /price@botusername
+bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   const userId = ctx.from.id;
   
   if (isRateLimited(userId)) {
@@ -360,7 +361,8 @@ bot.command('price', async (ctx) => {
 });
 
 // New portfolio check command
-bot.command('check', async (ctx) => {
+// Handle both /check and /check@botusername
+bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   const userId = ctx.from.id;
   
   if (isRateLimited(userId)) {
