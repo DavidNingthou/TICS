@@ -413,7 +413,7 @@ bot.command('check', async (ctx) => {
     const portfolioValue = totalTokens * currentPrice;
     
     const shortWalletAddress = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
-    const shortClaimAddress = walletData.claim_wallet_address ? 
+    const shortReceivingAddress = walletData.claim_wallet_address ? 
       `${walletData.claim_wallet_address.slice(0, 6)}...${walletData.claim_wallet_address.slice(-4)}` : 
       'Not set';
     
@@ -422,14 +422,12 @@ bot.command('check', async (ctx) => {
 
 👤 **Wallet:** \`${shortWalletAddress}\`
 🪙 **Total TICS:** \`${formatNumber(totalTokens)} TICS\`
-💰 **Portfolio Value:** \`${portfolioValue.toFixed(2)} USDT\`
+💰 **Portfolio Value:** \`$${portfolioValue.toFixed(2)} USDT\`
 
-📊 **Current Price:** \`${currentPrice}\`
+📊 **Current Price:** \`$${currentPrice}\`
 ${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
 
-🎯 **Claim Address:** \`${shortClaimAddress}\`
-${walletData.referral_count && parseInt(walletData.referral_count) > 0 ? `👥 **Referrals:** ${walletData.referral_count}` : ''}
-${walletData.total_referral_usd_rewards && parseFloat(walletData.total_referral_usd_rewards) > 0 ? `💸 **Referral Rewards:** ${walletData.total_referral_usd_rewards}` : ''}
+🎯 **Receiving Address:** \`${shortReceivingAddress}\`
 `.trim();
     
     const keyboard = {
@@ -495,7 +493,7 @@ bot.action(/refresh_(.+)/, async (ctx) => {
     const portfolioValue = totalTokens * currentPrice;
     
     const shortWalletAddress = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
-    const shortClaimAddress = walletData.claim_wallet_address ? 
+    const shortReceivingAddress = walletData.claim_wallet_address ? 
       `${walletData.claim_wallet_address.slice(0, 6)}...${walletData.claim_wallet_address.slice(-4)}` : 
       'Not set';
     
@@ -504,14 +502,12 @@ bot.action(/refresh_(.+)/, async (ctx) => {
 
 👤 **Wallet:** \`${shortWalletAddress}\`
 🪙 **Total TICS:** \`${formatNumber(totalTokens)} TICS\`
-💰 **Portfolio Value:** \`${portfolioValue.toFixed(2)} USDT\`
+💰 **Portfolio Value:** \`$${portfolioValue.toFixed(2)} USDT\`
 
-📊 **Current Price:** \`${currentPrice}\`
+📊 **Current Price:** \`$${currentPrice}\`
 ${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
 
-🎯 **Receiving Address:** \`${shortClaimAddress}\`
-${walletData.referral_count && parseInt(walletData.referral_count) > 0 ? `👥 **Referrals:** ${walletData.referral_count}` : ''}
-${walletData.total_referral_usd_rewards && parseFloat(walletData.total_referral_usd_rewards) > 0 ? `💸 **Referral Rewards:** ${walletData.total_referral_usd_rewards}` : ''}
+🎯 **Receiving Address:** \`${shortReceivingAddress}\`
 
 *Last updated: ${new Date().toLocaleTimeString()}*
 `.trim();
