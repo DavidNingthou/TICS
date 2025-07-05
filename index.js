@@ -432,22 +432,9 @@ ${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
 🎯 **Receiving Address:** \`${shortReceivingAddress}\`
 `.trim();
     
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: '🔄 Refresh Price', callback_data: `refresh_${walletAddress}` }
-        ],
-        [
-          { text: 'Trade on MEXC', url: 'https://www.mexc.com/exchange/TICS_USDT' },
-          { text: 'Trade on LBank', url: 'https://www.lbank.com/trade/tics_usdt' }
-        ]
-      ]
-    };
-    
     await safeReply(ctx, message, {
       parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id,
-      reply_markup: keyboard
+      reply_to_message_id: ctx.message.message_id
     });
     
   } catch (error) {
@@ -462,79 +449,6 @@ ${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
         reply_to_message_id: ctx.message.message_id
       });
     }
-  }
-});
-
-// Handle refresh button callback
-bot.action(/refresh_(.+)/, async (ctx) => {
-  const walletAddress = ctx.match[1];
-  const userId = ctx.from.id;
-  
-  if (isRateLimited(userId)) {
-    await ctx.answerCbQuery('⏱️ Please wait before refreshing again');
-    return;
-  }
-  
-  await ctx.answerCbQuery('🔄 Refreshing...');
-  
-  try {
-    const [walletData, priceData] = await Promise.all([
-      fetchWalletData(walletAddress),
-      getCombinedData().catch(() => exchangeData.mexc.price ? exchangeData.mexc : null)
-    ]);
-    
-    if (!priceData || !priceData.price) {
-      await ctx.editMessageText('❌ *Price data unavailable*\n\nCannot calculate portfolio value - price feeds are down', {
-        parse_mode: 'Markdown'
-      });
-      return;
-    }
-    
-    const totalTokens = parseFloat(walletData.total_tokens);
-    const currentPrice = parseFloat(priceData.price);
-    const portfolioValue = totalTokens * currentPrice;
-    
-    const shortWalletAddress = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
-    const shortReceivingAddress = walletData.claim_wallet_address ? 
-      `${walletData.claim_wallet_address.slice(0, 6)}...${walletData.claim_wallet_address.slice(-4)}` : 
-      'Not set';
-    
-    const message = `
-💼 *TICS Portfolio* 🔄
-
-👤 **Wallet:** \`${shortWalletAddress}\`
-🪙 **Total TICS:** \`${formatNumber(totalTokens)} TICS\`
-💰 **Portfolio Value:** \`$${portfolioValue.toFixed(2)} USDT\`
-
-📊 **Current Price:** \`$${currentPrice}\`
-${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
-
-🎯 **Receiving Address:** \`${shortReceivingAddress}\`
-
-*Last updated: ${new Date().toLocaleTimeString()}*
-`.trim();
-    
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: '🔄 Refresh Price', callback_data: `refresh_${walletAddress}` }
-        ],
-        [
-          { text: 'Trade on MEXC', url: 'https://www.mexc.com/exchange/TICS_USDT' },
-          { text: 'Trade on LBank', url: 'https://www.lbank.com/trade/tics_usdt' }
-        ]
-      ]
-    };
-    
-    await ctx.editMessageText(message, {
-      parse_mode: 'Markdown',
-      reply_markup: keyboard
-    });
-    
-  } catch (error) {
-    await ctx.editMessageText('❌ *Refresh failed*\n\nUnable to update portfolio data. Please try again later.', {
-      parse_mode: 'Markdown'
-    });
   }
 });
 
