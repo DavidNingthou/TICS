@@ -509,7 +509,7 @@ bot.action(/refresh_(.+)/, async (ctx) => {
 📊 **Current Price:** \`${currentPrice}\`
 ${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
 
-🎯 **Claim Address:** \`${shortClaimAddress}\`
+🎯 **Receiving Address:** \`${shortClaimAddress}\`
 ${walletData.referral_count && parseInt(walletData.referral_count) > 0 ? `👥 **Referrals:** ${walletData.referral_count}` : ''}
 ${walletData.total_referral_usd_rewards && parseFloat(walletData.total_referral_usd_rewards) > 0 ? `💸 **Referral Rewards:** ${walletData.total_referral_usd_rewards}` : ''}
 
