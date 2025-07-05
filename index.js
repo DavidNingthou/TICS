@@ -242,72 +242,26 @@ async function getCombinedData() {
   };
 }
 
-// New function to fetch wallet data
-async function fetchWalletData(walletAddress) {
-  try {
-    const response = await fetch(`https://presale-api.qubetics.com/v1/projects/qubetics/wallet/${walletAddress}`, {
-      timeout: 10000,
-      headers: {
-        'User-Agent': 'TICS-Bot/3.0'
-      }
-    });
-    
-    if (!response.ok) {
-      if (response.status === 404) {
-        throw new Error('WALLET_NOT_FOUND');
-      }
-      throw new Error(`API Error: ${response.status}`);
-    }
-    
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    if (error.message === 'WALLET_NOT_FOUND') {
-      throw error;
-    }
-    throw new Error('Failed to fetch wallet data');
-  }
-}
-
-// Helper function to validate wallet address
-function isValidWalletAddress(address) {
-  return /^0x[a-fA-F0-9]{40}$/.test(address);
-}
-
-// Helper function to format large numbers
-function formatNumber(num) {
-  if (num >= 1000000) {
-    return (num / 1000000).toFixed(2) + 'M';
-  } else if (num >= 1000) {
-    return (num / 1000).toFixed(2) + 'K';
-  }
-  return num.toFixed(2);
-}
-
 bot.telegram.setMyCommands([
-  { command: 'price', description: 'Get TICS price from both exchanges' },
-  { command: 'check', description: 'Check TICS portfolio (usage: /check wallet_address)' }
+  { command: 'price', description: 'Get TICS price from both exchanges' }
 ]);
 
 bot.start(async (ctx) => {
-  await safeReply(ctx, '🎉 *TICS Price Bot Ready!*\n\n📊 Commands:\n/price - Combined data from MEXC + LBank\n/check - Portfolio tracker (usage: /check wallet_address)', 
+  await safeReply(ctx, '🎉 *TICS Price Bot Ready!*\n\n📊 Command: /price - Combined data from MEXC + LBank', 
     { parse_mode: 'Markdown' });
 });
 
-bot.command(['help', `help@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
+bot.command('help', async (ctx) => {
   const helpMessage = `
 🤖 *TICS Price Bot*
 
 📊 /price - Combined price from MEXC + LBank
-💼 /check - Portfolio tracker
-   Usage: \`/check 0x...\`
   `.trim();
   
   await safeReply(ctx, helpMessage, { parse_mode: 'Markdown' });
 });
 
-// Handle both /price and /price@botusername
-bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
+bot.command('price', async (ctx) => {
   const userId = ctx.from.id;
   
   if (isRateLimited(userId)) {
@@ -360,98 +314,6 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   }
 });
 
-// New portfolio check command
-// Handle both /check and /check@botusername
-bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
-  const userId = ctx.from.id;
-  
-  if (isRateLimited(userId)) {
-    await safeReply(ctx, '⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
-      parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id
-    });
-    return;
-  }
-  
-  const input = ctx.message.text.split(' ');
-  
-  if (input.length < 2) {
-    await safeReply(ctx, '❌ *Invalid usage*\n\nPlease provide a wallet address:\n`/check 0x...`', {
-      parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id
-    });
-    return;
-  }
-  
-  const walletAddress = input[1].trim();
-  
-  if (!isValidWalletAddress(walletAddress)) {
-    await safeReply(ctx, '❌ *Invalid wallet address*\n\nPlease provide a valid Ethereum wallet address (0x...)', {
-      parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id
-    });
-    return;
-  }
-  
-  ctx.sendChatAction('typing').catch(() => {});
-  
-  try {
-    // Fetch wallet data and current price concurrently
-    const [walletData, priceData] = await Promise.all([
-      fetchWalletData(walletAddress),
-      getCombinedData().catch(() => exchangeData.mexc.price ? exchangeData.mexc : null)
-    ]);
-    
-    if (!priceData || !priceData.price) {
-      await safeReply(ctx, '❌ *Price data unavailable*\n\nCannot calculate portfolio value - price feeds are down', {
-        parse_mode: 'Markdown',
-        reply_to_message_id: ctx.message.message_id
-      });
-      return;
-    }
-    
-    const totalTokens = parseFloat(walletData.total_tokens);
-    const currentPrice = parseFloat(priceData.price);
-    const portfolioValue = totalTokens * currentPrice;
-    
-    const shortWalletAddress = `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`;
-    const shortReceivingAddress = walletData.claim_wallet_address ? 
-      `${walletData.claim_wallet_address.slice(0, 6)}...${walletData.claim_wallet_address.slice(-4)}` : 
-      'Not set';
-    
-    const message = `
-💼 *TICS Portfolio*
-
-👤 **Wallet:** \`${shortWalletAddress}\`
-🪙 **Total TICS:** \`${formatNumber(totalTokens)} TICS\`
-💰 **Portfolio Value:** \`$${portfolioValue.toFixed(2)} USDT\`
-
-📊 **Current Price:** \`$${currentPrice}\`
-${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
-
-🎯 **Receiving Address:** \`${shortReceivingAddress}\`
-`.trim();
-    
-    await safeReply(ctx, message, {
-      parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id
-    });
-    
-  } catch (error) {
-    if (error.message === 'WALLET_NOT_FOUND') {
-      await safeReply(ctx, '❌ *Wallet not found*\n\nThis wallet address has no TICS holdings or doesn\'t exist in the system.', {
-        parse_mode: 'Markdown',
-        reply_to_message_id: ctx.message.message_id
-      });
-    } else {
-      await safeReply(ctx, '❌ *Portfolio check failed*\n\nUnable to fetch wallet data. Please try again later.', {
-        parse_mode: 'Markdown',
-        reply_to_message_id: ctx.message.message_id
-      });
-    }
-  }
-});
-
 bot.catch(async (err, ctx) => {
   if (ctx.update.message && !err.message.includes('rate')) {
     try {
@@ -467,7 +329,6 @@ connectLBankWebSocket();
 bot.launch();
 console.log('✅ TICS Multi-Exchange Bot running');
 console.log('📡 MEXC: Live polling (2s) | LBank: WebSocket');
-console.log('💼 Portfolio tracker: /check wallet_address');
 
 setInterval(() => {
   console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: ${exchangeData.lbank.connected ? '✅' : '❌'}`);
