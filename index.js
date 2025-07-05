@@ -422,15 +422,14 @@ bot.command('check', async (ctx) => {
 
 👤 **Wallet:** \`${shortWalletAddress}\`
 🪙 **Total TICS:** \`${formatNumber(totalTokens)} TICS\`
-💰 **Portfolio Value:** \`$${portfolioValue.toFixed(2)} USDT\`
+💰 **Portfolio Value:** \`${portfolioValue.toFixed(2)} USDT\`
 
-📊 **Current Price:** \`$${currentPrice}\`
+📊 **Current Price:** \`${currentPrice}\`
 ${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
 
 🎯 **Claim Address:** \`${shortClaimAddress}\`
-${walletData.referral_code ? `🔗 **Referral Code:** \`${walletData.referral_code}\`` : ''}
 ${walletData.referral_count && parseInt(walletData.referral_count) > 0 ? `👥 **Referrals:** ${walletData.referral_count}` : ''}
-${walletData.total_referral_usd_rewards && parseFloat(walletData.total_referral_usd_rewards) > 0 ? `💸 **Referral Rewards:** $${walletData.total_referral_usd_rewards}` : ''}
+${walletData.total_referral_usd_rewards && parseFloat(walletData.total_referral_usd_rewards) > 0 ? `💸 **Referral Rewards:** ${walletData.total_referral_usd_rewards}` : ''}
 `.trim();
     
     const keyboard = {
@@ -505,15 +504,14 @@ bot.action(/refresh_(.+)/, async (ctx) => {
 
 👤 **Wallet:** \`${shortWalletAddress}\`
 🪙 **Total TICS:** \`${formatNumber(totalTokens)} TICS\`
-💰 **Portfolio Value:** \`$${portfolioValue.toFixed(2)} USDT\`
+💰 **Portfolio Value:** \`${portfolioValue.toFixed(2)} USDT\`
 
-📊 **Current Price:** \`$${currentPrice}\`
+📊 **Current Price:** \`${currentPrice}\`
 ${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
 
 🎯 **Claim Address:** \`${shortClaimAddress}\`
-${walletData.referral_code ? `🔗 **Referral Code:** \`${walletData.referral_code}\`` : ''}
 ${walletData.referral_count && parseInt(walletData.referral_count) > 0 ? `👥 **Referrals:** ${walletData.referral_count}` : ''}
-${walletData.total_referral_usd_rewards && parseFloat(walletData.total_referral_usd_rewards) > 0 ? `💸 **Referral Rewards:** $${walletData.total_referral_usd_rewards}` : ''}
+${walletData.total_referral_usd_rewards && parseFloat(walletData.total_referral_usd_rewards) > 0 ? `💸 **Referral Rewards:** ${walletData.total_referral_usd_rewards}` : ''}
 
 *Last updated: ${new Date().toLocaleTimeString()}*
 `.trim();
