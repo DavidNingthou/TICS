@@ -375,7 +375,7 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
       ]
     };
     
-    await safeReply(ctx, '🔒Please use this command in DM for your privacy.', {
+    await safeReply(ctx, '🔒Please use this command in DM.', {
       parse_mode: 'Markdown',
       reply_to_message_id: ctx.message.message_id,
       reply_markup: keyboard
