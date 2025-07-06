@@ -365,24 +365,6 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
 bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   const userId = ctx.from.id;
   
-  // Check if command is used in a group
-  if (ctx.chat.type !== 'private') {
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: '💬 Use in DM', url: `https://t.me/${ctx.botInfo.username}` }
-        ]
-      ]
-    };
-    
-    await safeReply(ctx, '🔒Please use this command in DM.', {
-      parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id,
-      reply_markup: keyboard
-    });
-    return;
-  }
-  
   if (isRateLimited(userId)) {
     await safeReply(ctx, '⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
       parse_mode: 'Markdown',
