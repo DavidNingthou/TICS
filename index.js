@@ -7,7 +7,7 @@ const ALLOWED_GROUP_ID = -1002771496854;
 const bot = new Telegraf(BOT_TOKEN);
 
 const QUBETICS_RPC = 'https://rpc.qubetics.com';
-const WHALE_THRESHOLD = 1;
+const WHALE_THRESHOLD = 100;
 const CEX_ADDRESSES = {
   'lbank': '0xB9885e76B4FeE07791377f4099d6eD4F3E49c4d0',
   'mexc': '0x05d71131B754d09ffc84E8250419539Fb5BFe8eb'
@@ -164,50 +164,101 @@ ${emoji} **${action} ${cexName}**
 
 async function processTransaction(tx) {
   try {
-    if (!tx.to || !tx.from || !tx.value) return;
+    let transfers = [];
     
-    const amount = weiToTics(tx.value);
-    if (amount < WHALE_THRESHOLD) return;
-    
-    const fromAddress = tx.from.toLowerCase();
-    const toAddress = tx.to.toLowerCase();
-    
-    let transferType = null;
-    let cexName = null;
-    
-    for (const [name, address] of Object.entries(CEX_ADDRESSES)) {
-      if (toAddress === address.toLowerCase()) {
-        transferType = 'deposit';
-        cexName = name.toUpperCase();
-        break;
+    // Check native TICS transfer
+    if (tx.to && tx.from && tx.value) {
+      const amount = weiToTics(tx.value);
+      if (amount >= WHALE_THRESHOLD) {
+        transfers.push({
+          from: tx.from.toLowerCase(),
+          to: tx.to.toLowerCase(),
+          amount: amount
+        });
       }
     }
     
-    if (!transferType) {
+    // Check transaction receipt for Transfer events
+    if (tx.hash) {
+      try {
+        const receiptResponse = await fetch(QUBETICS_RPC, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'eth_getTransactionReceipt',
+            params: [tx.hash],
+            id: 1
+          })
+        });
+        
+        const receiptData = await receiptResponse.json();
+        if (receiptData.result && receiptData.result.logs) {
+          for (const log of receiptData.result.logs) {
+            // Transfer event signature: 0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef
+            if (log.topics && log.topics[0] === '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef') {
+              if (log.topics.length >= 3 && log.data) {
+                const fromAddr = '0x' + log.topics[1].slice(-40);
+                const toAddr = '0x' + log.topics[2].slice(-40);
+                const amount = weiToTics('0x' + log.data.slice(2));
+                
+                if (amount >= WHALE_THRESHOLD) {
+                  transfers.push({
+                    from: fromAddr.toLowerCase(),
+                    to: toAddr.toLowerCase(),
+                    amount: amount
+                  });
+                }
+              }
+            }
+          }
+        }
+      } catch (error) {
+        // Continue with native transfer check if receipt fails
+      }
+    }
+    
+    // Process all detected transfers
+    for (const transfer of transfers) {
+      let transferType = null;
+      let cexName = null;
+      
+      // Check for deposits (TO CEX)
       for (const [name, address] of Object.entries(CEX_ADDRESSES)) {
-        if (fromAddress === address.toLowerCase()) {
-          transferType = 'withdrawal';
+        if (transfer.to === address.toLowerCase()) {
+          transferType = 'deposit';
           cexName = name.toUpperCase();
           break;
         }
       }
-    }
-    
-    if (transferType && cexName) {
-      let currentPrice = 0;
-      try {
-        const priceData = await getCombinedData().catch(() => 
-          exchangeData.mexc.price ? exchangeData.mexc : null
-        );
-        if (priceData && priceData.price) {
-          currentPrice = parseFloat(priceData.price);
+      
+      // Check for withdrawals (FROM CEX)
+      if (!transferType) {
+        for (const [name, address] of Object.entries(CEX_ADDRESSES)) {
+          if (transfer.from === address.toLowerCase()) {
+            transferType = 'withdrawal';
+            cexName = name.toUpperCase();
+            break;
+          }
         }
-      } catch (error) {
-        currentPrice = 0;
       }
       
-      const usdValue = amount * currentPrice;
-      await sendWhaleAlert(transferType, cexName, amount, usdValue, tx.hash);
+      if (transferType && cexName) {
+        let currentPrice = 0;
+        try {
+          const priceData = await getCombinedData().catch(() => 
+            exchangeData.mexc.price ? exchangeData.mexc : null
+          );
+          if (priceData && priceData.price) {
+            currentPrice = parseFloat(priceData.price);
+          }
+        } catch (error) {
+          currentPrice = 0;
+        }
+        
+        const usdValue = transfer.amount * currentPrice;
+        await sendWhaleAlert(transferType, cexName, transfer.amount, usdValue, tx.hash);
+      }
     }
   } catch (error) {
     console.error('Error processing transaction:', error);
