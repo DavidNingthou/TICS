@@ -6,6 +6,17 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const ALLOWED_GROUP_ID = -1002771496854; // TicsDev group
 const bot = new Telegraf(BOT_TOKEN);
 
+// Whale Alert Configuration
+const QUBETICS_RPC = 'https://rpc.qubetics.com';
+const WHALE_THRESHOLD = 100; // TICS
+const CEX_ADDRESSES = {
+  'lbank': '0xB9885e76B4FeE07791377f4099d6eD4F3E49c4d0',
+  'mexc': '0x05d71131B754d09ffc84E8250419539Fb5BFe8eb'
+};
+
+let whaleWs = null;
+let lastProcessedBlock = null;
+
 const RATE_LIMIT_WINDOW = 10000;
 const MAX_REQUESTS_PER_USER = 3;
 const userRateLimit = new Map();
@@ -515,14 +526,16 @@ bot.catch(async (err, ctx) => {
 
 startMexcPolling();
 connectLBankWebSocket();
+startWhaleMonitoring();
 
 bot.launch();
 console.log('✅ TICS Multi-Exchange Bot running');
 console.log('📡 MEXC: Live polling (2s) | LBank: WebSocket');
 console.log('💼 Portfolio tracker: /check wallet_address');
+console.log('🐋 Whale monitoring: Active (100+ TICS threshold)');
 
 setInterval(() => {
-  console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: ${exchangeData.lbank.connected ? '✅' : '❌'}`);
+  console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: ${exchangeData.lbank.connected ? '✅' : '❌'} | Whale Monitor: ${whaleWs && whaleWs.readyState === 1 ? '✅' : '❌'}`);
 }, 300000);
 
 const shutdown = (signal) => {
@@ -530,6 +543,7 @@ const shutdown = (signal) => {
   
   if (mexcPollingInterval) clearInterval(mexcPollingInterval);
   if (lbankWs) lbankWs.close();
+  if (whaleWs) whaleWs.close();
   
   bot.stop(signal);
   process.exit(0);
