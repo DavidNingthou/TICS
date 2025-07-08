@@ -3,6 +3,7 @@ import fetch from 'node-fetch';
 import WebSocket from 'ws';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
+const ALLOWED_GROUP_ID = -1002771496854; // TicsDev group
 const bot = new Telegraf(BOT_TOKEN);
 
 const RATE_LIMIT_WINDOW = 10000;
@@ -274,7 +275,44 @@ function isValidWalletAddress(address) {
   return /^0x[a-fA-F0-9]{40}$/.test(address);
 }
 
-// Helper function to format large numbers
+// Helper function to check if command is used in allowed group
+function isAllowedGroup(ctx) {
+  return ctx.chat.id === ALLOWED_GROUP_ID;
+}
+
+// Helper function to handle unauthorized usage
+async function handleUnauthorizedUsage(ctx) {
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: '🔗 Join TicsDev Group', url: 'https://t.me/TicsDev' }
+      ]
+    ]
+  };
+  
+  await safeReply(ctx, '🚫 *Unauthorized Access*\n\nThis bot only works in the TicsDev group.', {
+    parse_mode: 'Markdown',
+    reply_markup: keyboard
+  });
+}
+
+// Helper function to delete user message and reply with mention
+async function deleteAndReply(ctx, message, options = {}) {
+  try {
+    // Delete the original command message
+    await ctx.deleteMessage();
+  } catch (error) {
+    // Bot might not have delete permissions, continue anyway
+  }
+  
+  // Get user mention
+  const userMention = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
+  
+  // Add mention to the message
+  const messageWithMention = `${userMention}\n\n${message}`;
+  
+  return await safeReply(ctx, messageWithMention, options);
+}
 function formatNumber(num) {
   if (num >= 1000000) {
     return (num / 1000000).toFixed(2) + 'M';
@@ -290,11 +328,23 @@ bot.telegram.setMyCommands([
 ]);
 
 bot.start(async (ctx) => {
-  await safeReply(ctx, '🎉 *TICS Price Bot Ready!*\n\n📊 Commands:\n/price - Combined data from MEXC + LBank\n/check - Portfolio tracker (usage: /check wallet_address)', 
+  // Check if command is used in allowed group
+  if (!isAllowedGroup(ctx)) {
+    await handleUnauthorizedUsage(ctx);
+    return;
+  }
+  
+  await deleteAndReply(ctx, '🎉 *TICS Price Bot Ready!*\n\n📊 Commands:\n/price - Combined data from MEXC + LBank\n/check - Portfolio tracker (usage: /check wallet_address)', 
     { parse_mode: 'Markdown' });
 });
 
 bot.command(['help', `help@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
+  // Check if command is used in allowed group
+  if (!isAllowedGroup(ctx)) {
+    await handleUnauthorizedUsage(ctx);
+    return;
+  }
+  
   const helpMessage = `
 🤖 *TICS Price Bot*
 
@@ -303,17 +353,22 @@ bot.command(['help', `help@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
    Usage: \`/check 0x...\`
   `.trim();
   
-  await safeReply(ctx, helpMessage, { parse_mode: 'Markdown' });
+  await deleteAndReply(ctx, helpMessage, { parse_mode: 'Markdown' });
 });
 
 // Handle both /price and /price@botusername
 bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
+  // Check if command is used in allowed group
+  if (!isAllowedGroup(ctx)) {
+    await handleUnauthorizedUsage(ctx);
+    return;
+  }
+  
   const userId = ctx.from.id;
   
   if (isRateLimited(userId)) {
-    await safeReply(ctx, '⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
-      parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id
+    await deleteAndReply(ctx, '⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
+      parse_mode: 'Markdown'
     });
     return;
   }
@@ -346,16 +401,14 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
       ]
     };
     
-    await safeReply(ctx, message, {
+    await deleteAndReply(ctx, message, {
       parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id,
       reply_markup: keyboard
     });
     
   } catch (error) {
-    await safeReply(ctx, '❌ *Price unavailable*\n\n🔧 Both exchanges temporarily unavailable', { 
-      parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id 
+    await deleteAndReply(ctx, '❌ *Price unavailable*\n\n🔧 Both exchanges temporarily unavailable', { 
+      parse_mode: 'Markdown'
     });
   }
 });
@@ -363,12 +416,17 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
 // New portfolio check command
 // Handle both /check and /check@botusername
 bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
+  // Check if command is used in allowed group
+  if (!isAllowedGroup(ctx)) {
+    await handleUnauthorizedUsage(ctx);
+    return;
+  }
+  
   const userId = ctx.from.id;
   
   if (isRateLimited(userId)) {
-    await safeReply(ctx, '⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
-      parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id
+    await deleteAndReply(ctx, '⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
+      parse_mode: 'Markdown'
     });
     return;
   }
@@ -376,9 +434,8 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   const input = ctx.message.text.split(' ');
   
   if (input.length < 2) {
-    await safeReply(ctx, '❌ *Invalid usage*\n\nPlease provide a wallet address:\n`/check 0x...`', {
-      parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id
+    await deleteAndReply(ctx, '❌ *Invalid usage*\n\nPlease provide a wallet address:\n`/check 0x...`', {
+      parse_mode: 'Markdown'
     });
     return;
   }
@@ -386,9 +443,8 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   const walletAddress = input[1].trim();
   
   if (!isValidWalletAddress(walletAddress)) {
-    await safeReply(ctx, '❌ *Invalid wallet address*\n\nPlease provide a valid Ethereum wallet address (0x...)', {
-      parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id
+    await deleteAndReply(ctx, '❌ *Invalid wallet address*\n\nPlease provide a valid Ethereum wallet address (0x...)', {
+      parse_mode: 'Markdown'
     });
     return;
   }
@@ -403,9 +459,8 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
     ]);
     
     if (!priceData || !priceData.price) {
-      await safeReply(ctx, '❌ *Price data unavailable*\n\nCannot calculate portfolio value - price feeds are down', {
-        parse_mode: 'Markdown',
-        reply_to_message_id: ctx.message.message_id
+      await deleteAndReply(ctx, '❌ *Price data unavailable*\n\nCannot calculate portfolio value - price feeds are down', {
+        parse_mode: 'Markdown'
       });
       return;
     }
@@ -424,29 +479,26 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
 
 👤 **Wallet:** \`${shortWalletAddress}\`
 🪙 **Total TICS:** \`${formatNumber(totalTokens)} TICS\`
-💰 **Portfolio Value:** \`$${portfolioValue.toFixed(2)} USDT\`
+💰 **Portfolio Value:** \`${portfolioValue.toFixed(2)} USDT\`
 
-📊 **Current Price:** \`$${currentPrice}\`
+📊 **Current Price:** \`${currentPrice}\`
 ${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
 
 🎯 **Receiving Address:** \`${shortReceivingAddress}\`
 `.trim();
     
-    await safeReply(ctx, message, {
-      parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id
+    await deleteAndReply(ctx, message, {
+      parse_mode: 'Markdown'
     });
     
   } catch (error) {
     if (error.message === 'WALLET_NOT_FOUND') {
-      await safeReply(ctx, '❌ *Wallet not found*\n\nThis wallet address has no TICS holdings or doesn\'t exist in the system.', {
-        parse_mode: 'Markdown',
-        reply_to_message_id: ctx.message.message_id
+      await deleteAndReply(ctx, '❌ *Wallet not found*\n\nThis wallet address has no TICS holdings or doesn\'t exist in the system.', {
+        parse_mode: 'Markdown'
       });
     } else {
-      await safeReply(ctx, '❌ *Portfolio check failed*\n\nUnable to fetch wallet data. Please try again later.', {
-        parse_mode: 'Markdown',
-        reply_to_message_id: ctx.message.message_id
+      await deleteAndReply(ctx, '❌ *Portfolio check failed*\n\nUnable to fetch wallet data. Please try again later.', {
+        parse_mode: 'Markdown'
       });
     }
   }
