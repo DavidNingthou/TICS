@@ -526,7 +526,11 @@ bot.catch(async (err, ctx) => {
 
 startMexcPolling();
 connectLBankWebSocket();
-startWhaleMonitoring();
+
+// Initialize whale monitoring after a short delay
+setTimeout(() => {
+  startWhaleMonitoring();
+}, 2000);
 
 bot.launch();
 console.log('✅ TICS Multi-Exchange Bot running');
