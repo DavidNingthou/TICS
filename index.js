@@ -3,19 +3,15 @@ import fetch from 'node-fetch';
 import WebSocket from 'ws';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ALLOWED_GROUP_ID = -1002771496854; // TicsDev group
+const ALLOWED_GROUP_ID = -1002771496854;
 const bot = new Telegraf(BOT_TOKEN);
 
-// Whale Alert Configuration
 const QUBETICS_RPC = 'https://rpc.qubetics.com';
-const WHALE_THRESHOLD = 100; // TICS
+const WHALE_THRESHOLD = 100;
 const CEX_ADDRESSES = {
   'lbank': '0xB9885e76B4FeE07791377f4099d6eD4F3E49c4d0',
   'mexc': '0x05d71131B754d09ffc84E8250419539Fb5BFe8eb'
 };
-
-let whaleWs = null;
-let lastProcessedBlock = null;
 
 const RATE_LIMIT_WINDOW = 10000;
 const MAX_REQUESTS_PER_USER = 3;
@@ -42,6 +38,8 @@ let exchangeData = {
 
 let lbankWs = null;
 let mexcPollingInterval = null;
+let whaleWs = null;
+let lastProcessedBlock = null;
 
 async function safeReply(ctx, message, options = {}) {
   try {
@@ -84,14 +82,242 @@ function isRateLimited(userId) {
   return false;
 }
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [userId, limit] of userRateLimit.entries()) {
-    if (now > limit.resetTime) {
-      userRateLimit.delete(userId);
+function isAllowedGroup(ctx) {
+  return ctx.chat.id === ALLOWED_GROUP_ID;
+}
+
+async function handleUnauthorizedUsage(ctx) {
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: '🔗 Join TicsDev Group', url: 'https://t.me/TicsDev' }
+      ]
+    ]
+  };
+  
+  await safeReply(ctx, '🚫 *Unauthorized Access*\n\nThis bot only works in the TicsDev group.', {
+    parse_mode: 'Markdown',
+    reply_markup: keyboard
+  });
+}
+
+async function deleteAndReply(ctx, message, options = {}) {
+  try {
+    await ctx.deleteMessage();
+  } catch (error) {
+  }
+  
+  const userMention = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
+  const messageWithMention = `${userMention}\n\n${message}`;
+  
+  return await safeReply(ctx, messageWithMention, options);
+}
+
+function formatNumber(num) {
+  if (num >= 1000000) {
+    return (num / 1000000).toFixed(2) + 'M';
+  } else if (num >= 1000) {
+    return (num / 1000).toFixed(2) + 'K';
+  }
+  return num.toFixed(2);
+}
+
+function weiToTics(wei) {
+  return parseFloat(wei) / Math.pow(10, 18);
+}
+
+function getCexName(address) {
+  const lowerAddress = address.toLowerCase();
+  for (const [name, addr] of Object.entries(CEX_ADDRESSES)) {
+    if (addr.toLowerCase() === lowerAddress) {
+      return name.toUpperCase();
     }
   }
-}, RATE_LIMIT_WINDOW);
+  return 'Unknown';
+}
+
+async function sendWhaleAlert(type, cexName, amount, usdValue, txHash) {
+  try {
+    const direction = type === 'deposit' ? '→' : '←';
+    const emoji = type === 'deposit' ? '📈' : '📉';
+    const action = type === 'deposit' ? 'Deposit to' : 'Withdrawal from';
+    
+    const message = `
+🐋 *WHALE ALERT*
+
+${emoji} **${action} ${cexName}**
+🪙 **Amount:** \`${formatNumber(amount)} TICS\`
+💰 **Value:** \`$${usdValue.toFixed(2)} USDT\`
+🔗 [View on Explorer](https://ticsscan.com/tx/${txHash})
+`.trim();
+    
+    await bot.telegram.sendMessage(ALLOWED_GROUP_ID, message, {
+      parse_mode: 'Markdown',
+      disable_web_page_preview: true
+    });
+    
+    console.log(`🐋 Whale alert sent: ${amount.toFixed(2)} TICS ${type} ${cexName}`);
+  } catch (error) {
+    console.error('Failed to send whale alert:', error);
+  }
+}
+
+async function processTransaction(tx) {
+  try {
+    if (!tx.to || !tx.from || !tx.value) return;
+    
+    const amount = weiToTics(tx.value);
+    if (amount < WHALE_THRESHOLD) return;
+    
+    const fromAddress = tx.from.toLowerCase();
+    const toAddress = tx.to.toLowerCase();
+    
+    let transferType = null;
+    let cexName = null;
+    
+    for (const [name, address] of Object.entries(CEX_ADDRESSES)) {
+      if (toAddress === address.toLowerCase()) {
+        transferType = 'deposit';
+        cexName = name.toUpperCase();
+        break;
+      }
+    }
+    
+    if (!transferType) {
+      for (const [name, address] of Object.entries(CEX_ADDRESSES)) {
+        if (fromAddress === address.toLowerCase()) {
+          transferType = 'withdrawal';
+          cexName = name.toUpperCase();
+          break;
+        }
+      }
+    }
+    
+    if (transferType && cexName) {
+      let currentPrice = 0;
+      try {
+        const priceData = await getCombinedData().catch(() => 
+          exchangeData.mexc.price ? exchangeData.mexc : null
+        );
+        if (priceData && priceData.price) {
+          currentPrice = parseFloat(priceData.price);
+        }
+      } catch (error) {
+        currentPrice = 0;
+      }
+      
+      const usdValue = amount * currentPrice;
+      await sendWhaleAlert(transferType, cexName, amount, usdValue, tx.hash);
+    }
+  } catch (error) {
+    console.error('Error processing transaction:', error);
+  }
+}
+
+async function processBlock(blockNumber) {
+  try {
+    const response = await fetch(QUBETICS_RPC, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'eth_getBlockByNumber',
+        params: [blockNumber, true],
+        id: 1
+      })
+    });
+    
+    const data = await response.json();
+    if (data.result && data.result.transactions) {
+      for (const tx of data.result.transactions) {
+        await processTransaction(tx);
+      }
+    }
+  } catch (error) {
+    console.error('Error fetching block:', error);
+  }
+}
+
+function startWhaleMonitoring() {
+  try {
+    whaleWs = new WebSocket(`wss://rpc.qubetics.com`);
+    
+    whaleWs.on('open', () => {
+      console.log('🐋 Whale monitoring WebSocket connected');
+      
+      const subscribeMsg = {
+        jsonrpc: '2.0',
+        method: 'eth_subscribe',
+        params: ['newHeads'],
+        id: 1
+      };
+      whaleWs.send(JSON.stringify(subscribeMsg));
+    });
+    
+    whaleWs.on('message', async (data) => {
+      try {
+        const message = JSON.parse(data.toString());
+        
+        if (message.method === 'eth_subscription' && message.params) {
+          const blockHeader = message.params.result;
+          if (blockHeader && blockHeader.number) {
+            const blockNumber = blockHeader.number;
+            
+            if (lastProcessedBlock !== blockNumber) {
+              lastProcessedBlock = blockNumber;
+              await processBlock(blockNumber);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error processing whale monitoring message:', error);
+      }
+    });
+    
+    whaleWs.on('close', () => {
+      console.log('🐋 Whale monitoring WebSocket disconnected, reconnecting...');
+      setTimeout(startWhaleMonitoring, 5000);
+    });
+    
+    whaleWs.on('error', (error) => {
+      console.error('Whale monitoring WebSocket error:', error);
+    });
+    
+  } catch (error) {
+    console.error('Failed to start whale monitoring:', error);
+    setTimeout(startWhaleMonitoring, 5000);
+  }
+}
+
+async function startWhalePolling() {
+  try {
+    const response = await fetch(QUBETICS_RPC, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'eth_blockNumber',
+        params: [],
+        id: 1
+      })
+    });
+    
+    const data = await response.json();
+    if (data.result) {
+      const currentBlock = data.result;
+      if (lastProcessedBlock !== currentBlock) {
+        lastProcessedBlock = currentBlock;
+        await processBlock(currentBlock);
+      }
+    }
+  } catch (error) {
+    console.error('Error in whale polling:', error);
+  }
+}
 
 async function fetchMexcData() {
   try {
@@ -254,7 +480,6 @@ async function getCombinedData() {
   };
 }
 
-// New function to fetch wallet data
 async function fetchWalletData(walletAddress) {
   try {
     const response = await fetch(`https://presale-api.qubetics.com/v1/projects/qubetics/wallet/${walletAddress}`, {
@@ -281,57 +506,20 @@ async function fetchWalletData(walletAddress) {
   }
 }
 
-// Helper function to validate wallet address
 function isValidWalletAddress(address) {
   return /^0x[a-fA-F0-9]{40}$/.test(address);
 }
 
-// Helper function to check if command is used in allowed group
-function isAllowedGroup(ctx) {
-  return ctx.chat.id === ALLOWED_GROUP_ID;
-}
-
-// Helper function to handle unauthorized usage
-async function handleUnauthorizedUsage(ctx) {
-  const keyboard = {
-    inline_keyboard: [
-      [
-        { text: '🔗 Join TicsDev Group', url: 'https://t.me/TicsDev' }
-      ]
-    ]
-  };
-  
-  await safeReply(ctx, '🚫 *Unauthorized Access*\n\nThis bot only works in the TicsDev group.', {
-    parse_mode: 'Markdown',
-    reply_markup: keyboard
-  });
-}
-
-// Helper function to delete user message and reply with mention
-async function deleteAndReply(ctx, message, options = {}) {
-  try {
-    // Delete the original command message
-    await ctx.deleteMessage();
-  } catch (error) {
-    // Bot might not have delete permissions, continue anyway
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, limit] of userRateLimit.entries()) {
+    if (now > limit.resetTime) {
+      userRateLimit.delete(userId);
+    }
   }
-  
-  // Get user mention
-  const userMention = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
-  
-  // Add mention to the message
-  const messageWithMention = `${userMention}\n\n${message}`;
-  
-  return await safeReply(ctx, messageWithMention, options);
-}
-function formatNumber(num) {
-  if (num >= 1000000) {
-    return (num / 1000000).toFixed(2) + 'M';
-  } else if (num >= 1000) {
-    return (num / 1000).toFixed(2) + 'K';
-  }
-  return num.toFixed(2);
-}
+}, RATE_LIMIT_WINDOW);
+
+setInterval(startWhalePolling, 10000);
 
 bot.telegram.setMyCommands([
   { command: 'price', description: 'Get TICS price from both exchanges' },
@@ -339,7 +527,6 @@ bot.telegram.setMyCommands([
 ]);
 
 bot.start(async (ctx) => {
-  // Check if command is used in allowed group
   if (!isAllowedGroup(ctx)) {
     await handleUnauthorizedUsage(ctx);
     return;
@@ -350,7 +537,6 @@ bot.start(async (ctx) => {
 });
 
 bot.command(['help', `help@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
-  // Check if command is used in allowed group
   if (!isAllowedGroup(ctx)) {
     await handleUnauthorizedUsage(ctx);
     return;
@@ -367,9 +553,7 @@ bot.command(['help', `help@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   await deleteAndReply(ctx, helpMessage, { parse_mode: 'Markdown' });
 });
 
-// Handle both /price and /price@botusername
 bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
-  // Check if command is used in allowed group
   if (!isAllowedGroup(ctx)) {
     await handleUnauthorizedUsage(ctx);
     return;
@@ -388,8 +572,6 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   
   try {
     const data = await getCombinedData();
-    const now = Date.now();
-    const dataAge = Math.floor((now - data.timestamp) / 1000);
     
     const message = `
 🚀 *TICS / USDT* (Combined)
@@ -424,10 +606,7 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   }
 });
 
-// New portfolio check command
-// Handle both /check and /check@botusername
 bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
-  // Check if command is used in allowed group
   if (!isAllowedGroup(ctx)) {
     await handleUnauthorizedUsage(ctx);
     return;
@@ -463,7 +642,6 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   ctx.sendChatAction('typing').catch(() => {});
   
   try {
-    // Fetch wallet data and current price concurrently
     const [walletData, priceData] = await Promise.all([
       fetchWalletData(walletAddress),
       getCombinedData().catch(() => exchangeData.mexc.price ? exchangeData.mexc : null)
@@ -490,9 +668,9 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
 
 👤 **Wallet:** \`${shortWalletAddress}\`
 🪙 **Total TICS:** \`${formatNumber(totalTokens)} TICS\`
-💰 **Portfolio Value:** \`${portfolioValue.toFixed(2)} USDT\`
+💰 **Portfolio Value:** \`$${portfolioValue.toFixed(2)} USDT\`
 
-📊 **Current Price:** \`${currentPrice}\`
+📊 **Current Price:** \`$${currentPrice}\`
 ${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
 
 🎯 **Receiving Address:** \`${shortReceivingAddress}\`
@@ -526,11 +704,7 @@ bot.catch(async (err, ctx) => {
 
 startMexcPolling();
 connectLBankWebSocket();
-
-// Initialize whale monitoring after a short delay
-setTimeout(() => {
-  startWhaleMonitoring();
-}, 2000);
+startWhaleMonitoring();
 
 bot.launch();
 console.log('✅ TICS Multi-Exchange Bot running');
