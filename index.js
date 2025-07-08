@@ -241,54 +241,7 @@ async function processBlock(blockNumber) {
 }
 
 function startWhaleMonitoring() {
-  try {
-    whaleWs = new WebSocket(`wss://rpc.qubetics.com`);
-    
-    whaleWs.on('open', () => {
-      console.log('🐋 Whale monitoring WebSocket connected');
-      
-      const subscribeMsg = {
-        jsonrpc: '2.0',
-        method: 'eth_subscribe',
-        params: ['newHeads'],
-        id: 1
-      };
-      whaleWs.send(JSON.stringify(subscribeMsg));
-    });
-    
-    whaleWs.on('message', async (data) => {
-      try {
-        const message = JSON.parse(data.toString());
-        
-        if (message.method === 'eth_subscription' && message.params) {
-          const blockHeader = message.params.result;
-          if (blockHeader && blockHeader.number) {
-            const blockNumber = blockHeader.number;
-            
-            if (lastProcessedBlock !== blockNumber) {
-              lastProcessedBlock = blockNumber;
-              await processBlock(blockNumber);
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error processing whale monitoring message:', error);
-      }
-    });
-    
-    whaleWs.on('close', () => {
-      console.log('🐋 Whale monitoring WebSocket disconnected, reconnecting...');
-      setTimeout(startWhaleMonitoring, 5000);
-    });
-    
-    whaleWs.on('error', (error) => {
-      console.error('Whale monitoring WebSocket error:', error);
-    });
-    
-  } catch (error) {
-    console.error('Failed to start whale monitoring:', error);
-    setTimeout(startWhaleMonitoring, 5000);
-  }
+  console.log('🐋 Whale monitoring: Using polling method (WebSocket not supported)');
 }
 
 async function startWhalePolling() {
