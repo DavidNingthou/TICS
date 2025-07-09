@@ -122,23 +122,23 @@ function formatNumber(num) {
   return num.toFixed(2);
 }
 
-function weiToTics(wei) {
-  return parseFloat(wei) / Math.pow(10, 18);
-}
-
-function getCexName(address) {
-  const lowerAddress = address.toLowerCase();
-  for (const [name, addr] of Object.entries(CEX_ADDRESSES)) {
-    if (addr.toLowerCase() === lowerAddress) {
-      return name.toUpperCase();
-    }
+function weiToTics(weiValue) {
+  if (!weiValue || weiValue === '0x0' || weiValue === '0') return 0;
+  
+  try {
+    const hexValue = weiValue.toString().startsWith('0x') ? weiValue : '0x' + weiValue;
+    const bigIntValue = BigInt(hexValue);
+    const divisor = BigInt('1000000000000000000');
+    const result = Number(bigIntValue) / Number(divisor);
+    return result;
+  } catch (error) {
+    console.error('Error converting Wei to TICS:', error);
+    return 0;
   }
-  return 'Unknown';
 }
 
 async function sendWhaleAlert(type, cexName, amount, usdValue, txHash) {
   try {
-    const direction = type === 'deposit' ? '→' : '←';
     const emoji = type === 'deposit' ? '📈' : '📉';
     const action = type === 'deposit' ? 'Deposit to' : 'Withdrawal from';
     
@@ -156,7 +156,7 @@ ${emoji} **${action} ${cexName}**
       disable_web_page_preview: true
     });
     
-    console.log(`🐋 Whale alert sent: ${amount.toFixed(2)} TICS ${type} ${cexName}`);
+    console.log(`🐋 Whale alert sent: ${amount.toFixed(4)} TICS ${type} ${cexName}`);
   } catch (error) {
     console.error('Failed to send whale alert:', error);
   }
@@ -164,62 +164,83 @@ ${emoji} **${action} ${cexName}**
 
 async function processTransaction(tx) {
   try {
-    let transfers = [];
+    console.log(`🔍 Processing TX: ${tx.hash}`);
+    console.log(`   From: ${tx.from}`);
+    console.log(`   To: ${tx.to}`);
+    console.log(`   Value: ${tx.value}`);
+    
+    if (!tx.hash) {
+      console.log('❌ No transaction hash');
+      return;
+    }
+    
+    let detectedTransfers = [];
     
     // Check native TICS transfer
-    if (tx.to && tx.from && tx.value) {
+    if (tx.value && tx.value !== '0x0' && tx.value !== '0') {
       const amount = weiToTics(tx.value);
+      console.log(`💰 Native transfer amount: ${amount} TICS`);
+      
       if (amount >= WHALE_THRESHOLD) {
-        transfers.push({
-          from: tx.from.toLowerCase(),
-          to: tx.to.toLowerCase(),
-          amount: amount
+        detectedTransfers.push({
+          from: tx.from ? tx.from.toLowerCase() : '',
+          to: tx.to ? tx.to.toLowerCase() : '',
+          amount: amount,
+          type: 'native'
         });
       }
     }
     
-    // Check transaction receipt for Transfer events
-    if (tx.hash) {
-      try {
-        const receiptResponse = await fetch(QUBETICS_RPC, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            method: 'eth_getTransactionReceipt',
-            params: [tx.hash],
-            id: 1
-          })
-        });
+    // Check for contract-based transfers by getting transaction receipt
+    try {
+      const receiptResponse = await fetch(QUBETICS_RPC, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'eth_getTransactionReceipt',
+          params: [tx.hash],
+          id: 1
+        })
+      });
+      
+      const receiptData = await receiptResponse.json();
+      if (receiptData.result && receiptData.result.logs) {
+        console.log(`📝 Found ${receiptData.result.logs.length} logs in transaction`);
         
-        const receiptData = await receiptResponse.json();
-        if (receiptData.result && receiptData.result.logs) {
-          for (const log of receiptData.result.logs) {
-            // Transfer event signature: 0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef
-            if (log.topics && log.topics[0] === '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef') {
-              if (log.topics.length >= 3 && log.data) {
+        for (const log of receiptData.result.logs) {
+          if (log.topics && log.topics[0] === '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef') {
+            if (log.topics.length >= 3 && log.data && log.data !== '0x') {
+              try {
                 const fromAddr = '0x' + log.topics[1].slice(-40);
                 const toAddr = '0x' + log.topics[2].slice(-40);
-                const amount = weiToTics('0x' + log.data.slice(2));
+                const amount = weiToTics(log.data);
+                
+                console.log(`🔄 Contract transfer: ${amount} TICS from ${fromAddr} to ${toAddr}`);
                 
                 if (amount >= WHALE_THRESHOLD) {
-                  transfers.push({
+                  detectedTransfers.push({
                     from: fromAddr.toLowerCase(),
                     to: toAddr.toLowerCase(),
-                    amount: amount
+                    amount: amount,
+                    type: 'contract'
                   });
                 }
+              } catch (logError) {
+                console.error('Error parsing transfer log:', logError);
               }
             }
           }
         }
-      } catch (error) {
-        // Continue with native transfer check if receipt fails
       }
+    } catch (receiptError) {
+      console.log('⚠️ Could not fetch receipt, using native transfer only');
     }
     
     // Process all detected transfers
-    for (const transfer of transfers) {
+    for (const transfer of detectedTransfers) {
+      console.log(`🔍 Checking transfer: ${transfer.amount} TICS from ${transfer.from} to ${transfer.to} (${transfer.type})`);
+      
       let transferType = null;
       let cexName = null;
       
@@ -228,6 +249,7 @@ async function processTransaction(tx) {
         if (transfer.to === address.toLowerCase()) {
           transferType = 'deposit';
           cexName = name.toUpperCase();
+          console.log(`💰 DEPOSIT detected to ${cexName}`);
           break;
         }
       }
@@ -238,6 +260,7 @@ async function processTransaction(tx) {
           if (transfer.from === address.toLowerCase()) {
             transferType = 'withdrawal';
             cexName = name.toUpperCase();
+            console.log(`💸 WITHDRAWAL detected from ${cexName}`);
             break;
           }
         }
@@ -255,13 +278,20 @@ async function processTransaction(tx) {
             currentPrice = parseFloat(priceData.price);
           }
         } catch (error) {
-          currentPrice = 0;
+          console.log('⚠️ Could not get price, using $0');
         }
         
         const usdValue = transfer.amount * currentPrice;
         await sendWhaleAlert(transferType, cexName, transfer.amount, usdValue, tx.hash);
+      } else {
+        console.log(`ℹ️ Transfer not involving CEX addresses`);
       }
     }
+    
+    if (detectedTransfers.length === 0) {
+      console.log(`ℹ️ No significant transfers found in transaction`);
+    }
+    
   } catch (error) {
     console.error('Error processing transaction:', error);
   }
@@ -269,7 +299,8 @@ async function processTransaction(tx) {
 
 async function processBlock(blockNumber) {
   try {
-    console.log(`🔍 Processing block ${parseInt(blockNumber, 16)}`);
+    const blockNum = parseInt(blockNumber, 16);
+    console.log(`🔍 Processing block ${blockNum}`);
     
     const response = await fetch(QUBETICS_RPC, {
       method: 'POST',
@@ -285,12 +316,23 @@ async function processBlock(blockNumber) {
     });
     
     const data = await response.json();
+    
+    if (data.error) {
+      console.error('RPC Error:', data.error);
+      return;
+    }
+    
     if (data.result && data.result.transactions) {
-      console.log(`📝 Found ${data.result.transactions.length} transactions in block`);
+      const txCount = data.result.transactions.length;
+      console.log(`📝 Found ${txCount} transactions in block ${blockNum}`);
       
-      for (const tx of data.result.transactions) {
-        await processTransaction(tx);
+      if (txCount > 0) {
+        for (const tx of data.result.transactions) {
+          await processTransaction(tx);
+        }
       }
+    } else {
+      console.log(`❌ No transactions in block ${blockNum}`);
     }
   } catch (error) {
     console.error('Error fetching block:', error);
@@ -298,7 +340,60 @@ async function processBlock(blockNumber) {
 }
 
 function startWhaleMonitoring() {
-  console.log('🐋 Whale monitoring: Using polling method (WebSocket not supported)');
+  console.log('🐋 Starting whale monitoring with WebSocket...');
+  
+  try {
+    whaleWs = new WebSocket('wss://rpc.qubetics.com');
+    
+    whaleWs.on('open', () => {
+      console.log('🐋 Whale monitoring WebSocket connected');
+      
+      const subscribeMsg = {
+        jsonrpc: '2.0',
+        method: 'eth_subscribe',
+        params: ['newHeads'],
+        id: 1
+      };
+      console.log('📡 Subscribing to newHeads...');
+      whaleWs.send(JSON.stringify(subscribeMsg));
+    });
+    
+    whaleWs.on('message', async (data) => {
+      try {
+        const message = JSON.parse(data.toString());
+        
+        if (message.method === 'eth_subscription' && message.params) {
+          const blockHeader = message.params.result;
+          if (blockHeader && blockHeader.number) {
+            const blockNumber = blockHeader.number;
+            console.log(`🆕 New block via WebSocket: ${parseInt(blockNumber, 16)}`);
+            
+            if (lastProcessedBlock !== blockNumber) {
+              lastProcessedBlock = blockNumber;
+              await processBlock(blockNumber);
+            }
+          }
+        } else if (message.result) {
+          console.log('✅ WebSocket subscription confirmed:', message.result);
+        }
+      } catch (error) {
+        console.error('Error processing whale monitoring message:', error);
+      }
+    });
+    
+    whaleWs.on('close', () => {
+      console.log('🐋 Whale monitoring WebSocket disconnected, reconnecting...');
+      setTimeout(startWhaleMonitoring, 5000);
+    });
+    
+    whaleWs.on('error', (error) => {
+      console.error('Whale monitoring WebSocket error:', error);
+    });
+    
+  } catch (error) {
+    console.error('Failed to start whale monitoring:', error);
+    setTimeout(startWhaleMonitoring, 5000);
+  }
 }
 
 async function startWhalePolling() {
@@ -319,7 +414,10 @@ async function startWhalePolling() {
     const data = await response.json();
     if (data.result) {
       const currentBlock = data.result;
-      console.log(`🐋 Current block: ${parseInt(currentBlock, 16)}, Last processed: ${lastProcessedBlock ? parseInt(lastProcessedBlock, 16) : 'none'}`);
+      const currentBlockNum = parseInt(currentBlock, 16);
+      const lastBlockNum = lastProcessedBlock ? parseInt(lastProcessedBlock, 16) : 0;
+      
+      console.log(`🐋 Current block: ${currentBlockNum}, Last processed: ${lastBlockNum}`);
       
       if (lastProcessedBlock !== currentBlock) {
         lastProcessedBlock = currentBlock;
@@ -722,10 +820,10 @@ bot.launch();
 console.log('✅ TICS Multi-Exchange Bot running');
 console.log('📡 MEXC: Live polling (2s) | LBank: WebSocket');
 console.log('💼 Portfolio tracker: /check wallet_address');
-console.log('🐋 Whale monitoring: Active (100+ TICS threshold)');
+console.log('🐋 Whale monitoring: Active (1+ TICS threshold)');
 
 setInterval(() => {
-  console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: ${exchangeData.lbank.connected ? '✅' : '❌'} | Whale Monitor: ✅ (Polling)`);
+  console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: ${exchangeData.lbank.connected ? '✅' : '❌'} | Whale Monitor: ${whaleWs && whaleWs.readyState === 1 ? '✅' : '❌'}`);
 }, 300000);
 
 const shutdown = (signal) => {
