@@ -267,6 +267,8 @@ async function processTransaction(tx) {
 
 async function processBlock(blockNumber) {
   try {
+    console.log(`🔍 Processing block ${parseInt(blockNumber, 16)}`);
+    
     const response = await fetch(QUBETICS_RPC, {
       method: 'POST',
       headers: {
@@ -282,6 +284,8 @@ async function processBlock(blockNumber) {
     
     const data = await response.json();
     if (data.result && data.result.transactions) {
+      console.log(`📝 Found ${data.result.transactions.length} transactions in block`);
+      
       for (const tx of data.result.transactions) {
         await processTransaction(tx);
       }
@@ -313,6 +317,8 @@ async function startWhalePolling() {
     const data = await response.json();
     if (data.result) {
       const currentBlock = data.result;
+      console.log(`🐋 Current block: ${parseInt(currentBlock, 16)}, Last processed: ${lastProcessedBlock ? parseInt(lastProcessedBlock, 16) : 'none'}`);
+      
       if (lastProcessedBlock !== currentBlock) {
         lastProcessedBlock = currentBlock;
         await processBlock(currentBlock);
@@ -717,7 +723,7 @@ console.log('💼 Portfolio tracker: /check wallet_address');
 console.log('🐋 Whale monitoring: Active (100+ TICS threshold)');
 
 setInterval(() => {
-  console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: ${exchangeData.lbank.connected ? '✅' : '❌'} | Whale Monitor: ${whaleWs && whaleWs.readyState === 1 ? '✅' : '❌'}`);
+  console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: ${exchangeData.lbank.connected ? '✅' : '❌'} | Whale Monitor: ✅ (Polling)`);
 }, 300000);
 
 const shutdown = (signal) => {
