@@ -244,6 +244,8 @@ async function processTransaction(tx) {
       }
       
       if (transferType && cexName) {
+        console.log(`🐋 WHALE DETECTED: ${transfer.amount.toFixed(4)} TICS ${transferType} ${cexName} | TX: ${tx.hash}`);
+        
         let currentPrice = 0;
         try {
           const priceData = await getCombinedData().catch(() => 
@@ -529,7 +531,7 @@ setInterval(() => {
   }
 }, RATE_LIMIT_WINDOW);
 
-setInterval(startWhalePolling, 10000);
+setInterval(startWhalePolling, 5000);
 
 bot.telegram.setMyCommands([
   { command: 'price', description: 'Get TICS price from both exchanges' },
