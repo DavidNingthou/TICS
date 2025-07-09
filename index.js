@@ -340,60 +340,7 @@ async function processBlock(blockNumber) {
 }
 
 function startWhaleMonitoring() {
-  console.log('🐋 Starting whale monitoring with WebSocket...');
-  
-  try {
-    whaleWs = new WebSocket('wss://rpc.qubetics.com');
-    
-    whaleWs.on('open', () => {
-      console.log('🐋 Whale monitoring WebSocket connected');
-      
-      const subscribeMsg = {
-        jsonrpc: '2.0',
-        method: 'eth_subscribe',
-        params: ['newHeads'],
-        id: 1
-      };
-      console.log('📡 Subscribing to newHeads...');
-      whaleWs.send(JSON.stringify(subscribeMsg));
-    });
-    
-    whaleWs.on('message', async (data) => {
-      try {
-        const message = JSON.parse(data.toString());
-        
-        if (message.method === 'eth_subscription' && message.params) {
-          const blockHeader = message.params.result;
-          if (blockHeader && blockHeader.number) {
-            const blockNumber = blockHeader.number;
-            console.log(`🆕 New block via WebSocket: ${parseInt(blockNumber, 16)}`);
-            
-            if (lastProcessedBlock !== blockNumber) {
-              lastProcessedBlock = blockNumber;
-              await processBlock(blockNumber);
-            }
-          }
-        } else if (message.result) {
-          console.log('✅ WebSocket subscription confirmed:', message.result);
-        }
-      } catch (error) {
-        console.error('Error processing whale monitoring message:', error);
-      }
-    });
-    
-    whaleWs.on('close', () => {
-      console.log('🐋 Whale monitoring WebSocket disconnected, reconnecting...');
-      setTimeout(startWhaleMonitoring, 5000);
-    });
-    
-    whaleWs.on('error', (error) => {
-      console.error('Whale monitoring WebSocket error:', error);
-    });
-    
-  } catch (error) {
-    console.error('Failed to start whale monitoring:', error);
-    setTimeout(startWhaleMonitoring, 5000);
-  }
+  console.log('🐋 Whale monitoring: Using polling method (WebSocket not available)');
 }
 
 async function startWhalePolling() {
@@ -823,7 +770,7 @@ console.log('💼 Portfolio tracker: /check wallet_address');
 console.log('🐋 Whale monitoring: Active (1+ TICS threshold)');
 
 setInterval(() => {
-  console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: ${exchangeData.lbank.connected ? '✅' : '❌'} | Whale Monitor: ${whaleWs && whaleWs.readyState === 1 ? '✅' : '❌'}`);
+  console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: ${exchangeData.lbank.connected ? '✅' : '❌'} | Whale Monitor: ✅ (Polling)`);
 }, 300000);
 
 const shutdown = (signal) => {
@@ -831,7 +778,6 @@ const shutdown = (signal) => {
   
   if (mexcPollingInterval) clearInterval(mexcPollingInterval);
   if (lbankWs) lbankWs.close();
-  if (whaleWs) whaleWs.close();
   
   bot.stop(signal);
   process.exit(0);
