@@ -64,6 +64,12 @@ async function safeReply(ctx, message, options = {}) {
 }
 
 function isRateLimited(userId) {
+  // Defensive check for undefined userId
+  if (!userId) {
+    console.warn('Rate limiting called with undefined userId');
+    return false; // Allow the request but log the issue
+  }
+  
   const now = Date.now();
   const userLimit = userRateLimit.get(userId);
   
@@ -106,9 +112,26 @@ async function deleteAndReply(ctx, message, options = {}) {
   try {
     await ctx.deleteMessage();
   } catch (error) {
+    // Silently fail if we can't delete the message
   }
   
-  const userMention = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
+  // Safely get user mention with fallbacks
+  let userMention;
+  
+  if (ctx.from) {
+    if (ctx.from.username) {
+      userMention = `@${ctx.from.username}`;
+    } else if (ctx.from.first_name) {
+      userMention = ctx.from.first_name;
+    } else if (ctx.from.last_name) {
+      userMention = ctx.from.last_name;
+    } else {
+      userMention = `User ${ctx.from.id || 'Unknown'}`;
+    }
+  } else {
+    userMention = 'User';
+  }
+  
   const messageWithMention = `${userMention}\n\n${message}`;
   
   return await safeReply(ctx, messageWithMention, options);
@@ -616,6 +639,13 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
     return;
   }
   
+  // Safety check for user object
+  if (!ctx.from || !ctx.from.id) {
+    console.warn('Price command called with invalid user object:', ctx.from);
+    await safeReply(ctx, '❌ Unable to identify user. Please try again.');
+    return;
+  }
+  
   const userId = ctx.from.id;
   
   if (isRateLimited(userId)) {
@@ -666,6 +696,13 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
 bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   if (!isAllowedGroup(ctx)) {
     await handleUnauthorizedUsage(ctx);
+    return;
+  }
+  
+  // Safety check for user object
+  if (!ctx.from || !ctx.from.id) {
+    console.warn('Check command called with invalid user object:', ctx.from);
+    await safeReply(ctx, '❌ Unable to identify user. Please try again.');
     return;
   }
   
@@ -750,11 +787,23 @@ ${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
   }
 });
 
+// Enhanced error handler with better logging
 bot.catch(async (err, ctx) => {
+  console.error('Bot error caught:', {
+    error: err.message,
+    stack: err.stack,
+    userId: ctx?.from?.id,
+    username: ctx?.from?.username,
+    firstName: ctx?.from?.first_name,
+    chatId: ctx?.chat?.id,
+    updateType: ctx?.update_type
+  });
+  
   if (ctx.update.message && !err.message.includes('rate')) {
     try {
       await safeReply(ctx, '⚠️ Temporary issue - please retry');
     } catch (replyError) {
+      console.error('Failed to send error message:', replyError);
     }
   }
 });
