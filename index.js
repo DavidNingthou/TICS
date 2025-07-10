@@ -19,34 +19,14 @@ const MAX_REQUESTS_PER_USER = 3;
 const userRateLimit = new Map();
 
 let exchangeData = {
-  mexc: {
-    price: null,
-    volume: null,
-    high: null,
-    low: null,
-    timestamp: 0,
-    connected: false
-  },
-  lbank: {
-    price: null,
-    volume: null,
-    high: null,
-    low: null,
-    timestamp: 0,
-    connected: false
-  }
+  mexc: { price: null, volume: null, high: null, low: null, timestamp: 0, connected: false },
+  lbank: { price: null, volume: null, high: null, low: null, timestamp: 0, connected: false }
 };
 
 let lbankWs = null;
 let mexcPollingInterval = null;
 let whaleWs = null;
 let lastProcessedBlock = null;
-
-// Escape Markdown special characters to prevent parsing errors
-function escapeMarkdownChars(text) {
-  if (!text) return text;
-  return text.replace(/[_*\[\]()~`>#+\-=|{}.!\\]/g, '\\$1');
-}
 
 async function safeReply(ctx, message, options = {}) {
   try {
@@ -70,26 +50,17 @@ async function safeReply(ctx, message, options = {}) {
 }
 
 function isRateLimited(userId) {
-  // Defensive check for undefined userId
-  if (!userId) {
-    console.warn('Rate limiting called with undefined userId');
-    return false; // Allow the request but log the issue
-  }
+  if (!userId) return false;
   
   const now = Date.now();
   const userLimit = userRateLimit.get(userId);
   
   if (!userLimit || now > userLimit.resetTime) {
-    userRateLimit.set(userId, {
-      count: 1,
-      resetTime: now + RATE_LIMIT_WINDOW
-    });
+    userRateLimit.set(userId, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
     return false;
   }
   
-  if (userLimit.count >= MAX_REQUESTS_PER_USER) {
-    return true;
-  }
+  if (userLimit.count >= MAX_REQUESTS_PER_USER) return true;
   
   userLimit.count++;
   return false;
@@ -102,9 +73,7 @@ function isAllowedGroup(ctx) {
 async function handleUnauthorizedUsage(ctx) {
   const keyboard = {
     inline_keyboard: [
-      [
-        { text: '🔗 Join TicsDev Group', url: 'https://t.me/TicsDev' }
-      ]
+      [{ text: '🔗 Join TicsDev Group', url: 'https://t.me/TicsDev' }]
     ]
   };
   
@@ -114,44 +83,9 @@ async function handleUnauthorizedUsage(ctx) {
   });
 }
 
-async function deleteAndReply(ctx, message, options = {}) {
-  try {
-    await ctx.deleteMessage();
-  } catch (error) {
-    // Silently fail if we can't delete the message
-  }
-  
-  // Safely get user mention with markdown escaping
-  let userMention;
-  
-  if (ctx.from) {
-    if (ctx.from.username) {
-      // Escape markdown special characters in username
-      userMention = `@${escapeMarkdownChars(ctx.from.username)}`;
-    } else if (ctx.from.first_name) {
-      // Escape markdown special characters in first name
-      userMention = escapeMarkdownChars(ctx.from.first_name);
-    } else if (ctx.from.last_name) {
-      // Escape markdown special characters in last name
-      userMention = escapeMarkdownChars(ctx.from.last_name);
-    } else {
-      userMention = `User ${ctx.from.id || 'Unknown'}`;
-    }
-  } else {
-    userMention = 'User';
-  }
-  
-  const messageWithMention = `${userMention}\n\n${message}`;
-  
-  return await safeReply(ctx, messageWithMention, options);
-}
-
 function formatNumber(num) {
-  if (num >= 1000000) {
-    return (num / 1000000).toFixed(2) + 'M';
-  } else if (num >= 1000) {
-    return (num / 1000).toFixed(2) + 'K';
-  }
+  if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+  if (num >= 1000) return (num / 1000).toFixed(2) + 'K';
   return num.toFixed(2);
 }
 
@@ -162,8 +96,7 @@ function weiToTics(weiValue) {
     const hexValue = weiValue.toString().startsWith('0x') ? weiValue : '0x' + weiValue;
     const bigIntValue = BigInt(hexValue);
     const divisor = BigInt('1000000000000000000');
-    const result = Number(bigIntValue) / Number(divisor);
-    return result;
+    return Number(bigIntValue) / Number(divisor);
   } catch (error) {
     return 0;
   }
@@ -236,7 +169,6 @@ async function processTransaction(tx) {
     
     let detectedTransfers = [];
     
-    // Check native TICS transfer
     if (tx.value && tx.value !== '0x0' && tx.value !== '0') {
       const amount = weiToTics(tx.value);
       if (amount >= CEX_THRESHOLD) {
@@ -249,7 +181,6 @@ async function processTransaction(tx) {
       }
     }
     
-    // Check for contract-based transfers
     try {
       const receiptResponse = await fetch(QUBETICS_RPC, {
         method: 'POST',
@@ -289,17 +220,14 @@ async function processTransaction(tx) {
     } catch (receiptError) {
     }
     
-    // Process all detected transfers
     const currentPrice = await getCurrentPrice();
     
     for (const transfer of detectedTransfers) {
       const usdValue = transfer.amount * currentPrice;
       
-      // Check for CEX alerts
       let transferType = null;
       let cexName = null;
       
-      // Check for deposits (TO CEX)
       for (const [name, address] of Object.entries(CEX_ADDRESSES)) {
         if (transfer.to === address.toLowerCase()) {
           transferType = 'deposit';
@@ -309,7 +237,6 @@ async function processTransaction(tx) {
         }
       }
       
-      // Check for withdrawals (FROM CEX)
       if (!transferType) {
         for (const [name, address] of Object.entries(CEX_ADDRESSES)) {
           if (transfer.from === address.toLowerCase()) {
@@ -321,7 +248,6 @@ async function processTransaction(tx) {
         }
       }
       
-      // Check for whale alerts (large transfers regardless of CEX)
       if (transfer.amount >= WHALE_THRESHOLD) {
         await sendWhaleAlert(transfer.from, transfer.to, transfer.amount, usdValue, tx.hash);
       }
@@ -336,9 +262,7 @@ async function processBlock(blockNumber) {
   try {
     const response = await fetch(QUBETICS_RPC, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         jsonrpc: '2.0',
         method: 'eth_getBlockByNumber',
@@ -414,9 +338,7 @@ async function fetchMexcData() {
   try {
     const response = await fetch('https://www.mexc.co/open/api/v2/market/ticker?symbol=TICS_USDT', {
       timeout: 5000,
-      headers: {
-        'User-Agent': 'TICS-Bot/3.0'
-      }
+      headers: { 'User-Agent': 'TICS-Bot/3.0' }
     });
     
     if (!response.ok) throw new Error(`MEXC API Error: ${response.status}`);
@@ -575,9 +497,7 @@ async function fetchWalletData(walletAddress) {
   try {
     const response = await fetch(`https://presale-api.qubetics.com/v1/projects/qubetics/wallet/${walletAddress}`, {
       timeout: 10000,
-      headers: {
-        'User-Agent': 'TICS-Bot/3.0'
-      }
+      headers: { 'User-Agent': 'TICS-Bot/3.0' }
     });
     
     if (!response.ok) {
@@ -621,8 +541,8 @@ bot.start(async (ctx) => {
     return;
   }
   
-  await deleteAndReply(ctx, '🎉 *TICS Price Bot Ready!*\n\n📊 Commands:\n/price - Combined data from MEXC + LBank\n/check - Portfolio tracker (usage: /check wallet_address)', 
-    { parse_mode: 'Markdown' });
+  await ctx.reply('🎉 *TICS Price Bot Ready!*\n\n📊 Commands:\n/price - Combined data from MEXC + LBank\n/check - Portfolio tracker (usage: /check wallet_address)', 
+    { parse_mode: 'Markdown', reply_to_message_id: ctx.message.message_id });
 });
 
 bot.command(['help', `help@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
@@ -639,7 +559,10 @@ bot.command(['help', `help@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
    Usage: \`/check 0x...\`
   `.trim();
   
-  await deleteAndReply(ctx, helpMessage, { parse_mode: 'Markdown' });
+  await ctx.reply(helpMessage, { 
+    parse_mode: 'Markdown', 
+    reply_to_message_id: ctx.message.message_id 
+  });
 });
 
 bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
@@ -648,9 +571,7 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
     return;
   }
   
-  // Safety check for user object
   if (!ctx.from || !ctx.from.id) {
-    console.warn('Price command called with invalid user object:', ctx.from);
     await safeReply(ctx, '❌ Unable to identify user. Please try again.');
     return;
   }
@@ -658,8 +579,9 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   const userId = ctx.from.id;
   
   if (isRateLimited(userId)) {
-    await deleteAndReply(ctx, '⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
-      parse_mode: 'Markdown'
+    await ctx.reply('⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
+      parse_mode: 'Markdown',
+      reply_to_message_id: ctx.message.message_id
     });
     return;
   }
@@ -690,14 +612,16 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
       ]
     };
     
-    await deleteAndReply(ctx, message, {
+    await ctx.reply(message, {
       parse_mode: 'Markdown',
-      reply_markup: keyboard
+      reply_markup: keyboard,
+      reply_to_message_id: ctx.message.message_id
     });
     
   } catch (error) {
-    await deleteAndReply(ctx, '❌ *Price unavailable*\n\n🔧 Both exchanges temporarily unavailable', { 
-      parse_mode: 'Markdown'
+    await ctx.reply('❌ *Price unavailable*\n\n🔧 Both exchanges temporarily unavailable', { 
+      parse_mode: 'Markdown',
+      reply_to_message_id: ctx.message.message_id
     });
   }
 });
@@ -708,9 +632,7 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
     return;
   }
   
-  // Safety check for user object
   if (!ctx.from || !ctx.from.id) {
-    console.warn('Check command called with invalid user object:', ctx.from);
     await safeReply(ctx, '❌ Unable to identify user. Please try again.');
     return;
   }
@@ -718,68 +640,9 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   const userId = ctx.from.id;
   
   if (isRateLimited(userId)) {
-    await deleteAndReply(ctx, '⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
-      parse_mode: 'Markdown'
-    });
-    return;
-  }
-  
-  ctx.sendChatAction('typing').catch(() => {});
-  
-  try {
-    const data = await getCombinedData();
-    
-    const message = `
-🚀 *TICS / USDT* (Combined)
-
-💵 **Avg Price:** \`${data.price}\`
-📊 **24h Volume:** \`${data.volume.toLocaleString()} TICS\`
-🟢 **High:** \`${data.high}\` | 🔴 **Low:** \`${data.low}\`
-
-📈 **Exchange Breakdown:**
-🔸 MEXC: \`${data.mexcPrice}\` (${data.mexcVolume.toLocaleString()})
-🔹 LBank: \`${data.lbankPrice}\` (${data.lbankVolume.toLocaleString()})
-`.trim();
-    
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: 'Trade on MEXC', url: 'https://www.mexc.com/exchange/TICS_USDT' },
-          { text: 'Trade on LBank', url: 'https://www.lbank.com/trade/tics_usdt' }
-        ]
-      ]
-    };
-    
-    await deleteAndReply(ctx, message, {
+    await ctx.reply('⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
       parse_mode: 'Markdown',
-      reply_markup: keyboard
-    });
-    
-  } catch (error) {
-    await deleteAndReply(ctx, '❌ *Price unavailable*\n\n🔧 Both exchanges temporarily unavailable', { 
-      parse_mode: 'Markdown'
-    });
-  }
-});
-
-bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
-  if (!isAllowedGroup(ctx)) {
-    await handleUnauthorizedUsage(ctx);
-    return;
-  }
-  
-  // Safety check for user object
-  if (!ctx.from || !ctx.from.id) {
-    console.warn('Check command called with invalid user object:', ctx.from);
-    await safeReply(ctx, '❌ Unable to identify user. Please try again.');
-    return;
-  }
-  
-  const userId = ctx.from.id;
-  
-  if (isRateLimited(userId)) {
-    await deleteAndReply(ctx, '⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
-      parse_mode: 'Markdown'
+      reply_to_message_id: ctx.message.message_id
     });
     return;
   }
@@ -787,8 +650,9 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   const input = ctx.message.text.split(' ');
   
   if (input.length < 2) {
-    await deleteAndReply(ctx, '❌ *Invalid usage*\n\nPlease provide a wallet address:\n`/check 0x...`', {
-      parse_mode: 'Markdown'
+    await ctx.reply('❌ *Invalid usage*\n\nPlease provide a wallet address:\n`/check 0x...`', {
+      parse_mode: 'Markdown',
+      reply_to_message_id: ctx.message.message_id
     });
     return;
   }
@@ -796,8 +660,9 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   const walletAddress = input[1].trim();
   
   if (!isValidWalletAddress(walletAddress)) {
-    await deleteAndReply(ctx, '❌ *Invalid wallet address*\n\nPlease provide a valid Ethereum wallet address (0x...)', {
-      parse_mode: 'Markdown'
+    await ctx.reply('❌ *Invalid wallet address*\n\nPlease provide a valid Ethereum wallet address (0x...)', {
+      parse_mode: 'Markdown',
+      reply_to_message_id: ctx.message.message_id
     });
     return;
   }
@@ -811,8 +676,9 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
     ]);
     
     if (!priceData || !priceData.price) {
-      await deleteAndReply(ctx, '❌ *Price data unavailable*\n\nCannot calculate portfolio value - price feeds are down', {
-        parse_mode: 'Markdown'
+      await ctx.reply('❌ *Price data unavailable*\n\nCannot calculate portfolio value - price feeds are down', {
+        parse_mode: 'Markdown',
+        reply_to_message_id: ctx.message.message_id
       });
       return;
     }
@@ -839,33 +705,32 @@ ${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
 🎯 **Receiving Address:** \`${shortReceivingAddress}\`
 `.trim();
     
-    await deleteAndReply(ctx, message, {
-      parse_mode: 'Markdown'
+    await ctx.reply(message, {
+      parse_mode: 'Markdown',
+      reply_to_message_id: ctx.message.message_id
     });
     
   } catch (error) {
     if (error.message === 'WALLET_NOT_FOUND') {
-      await deleteAndReply(ctx, '❌ *Wallet not found*\n\nThis wallet address has no TICS holdings or doesn\'t exist in the system.', {
-        parse_mode: 'Markdown'
+      await ctx.reply('❌ *Wallet not found*\n\nThis wallet address has no TICS holdings or doesn\'t exist in the system.', {
+        parse_mode: 'Markdown',
+        reply_to_message_id: ctx.message.message_id
       });
     } else {
-      await deleteAndReply(ctx, '❌ *Portfolio check failed*\n\nUnable to fetch wallet data. Please try again later.', {
-        parse_mode: 'Markdown'
+      await ctx.reply('❌ *Portfolio check failed*\n\nUnable to fetch wallet data. Please try again later.', {
+        parse_mode: 'Markdown',
+        reply_to_message_id: ctx.message.message_id
       });
     }
   }
 });
 
-// Enhanced error handler with better logging
 bot.catch(async (err, ctx) => {
   console.error('Bot error caught:', {
     error: err.message,
-    stack: err.stack,
     userId: ctx?.from?.id,
     username: ctx?.from?.username,
-    firstName: ctx?.from?.first_name,
-    chatId: ctx?.chat?.id,
-    updateType: ctx?.update_type
+    chatId: ctx?.chat?.id
   });
   
   if (ctx.update.message && !err.message.includes('rate')) {
