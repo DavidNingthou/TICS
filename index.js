@@ -42,6 +42,12 @@ let mexcPollingInterval = null;
 let whaleWs = null;
 let lastProcessedBlock = null;
 
+// Escape Markdown special characters to prevent parsing errors
+function escapeMarkdownChars(text) {
+  if (!text) return text;
+  return text.replace(/[_*\[\]()~`>#+\-=|{}.!\\]/g, '\\$1');
+}
+
 async function safeReply(ctx, message, options = {}) {
   try {
     return await ctx.reply(message, options);
@@ -115,16 +121,19 @@ async function deleteAndReply(ctx, message, options = {}) {
     // Silently fail if we can't delete the message
   }
   
-  // Safely get user mention with fallbacks
+  // Safely get user mention with markdown escaping
   let userMention;
   
   if (ctx.from) {
     if (ctx.from.username) {
-      userMention = `@${ctx.from.username}`;
+      // Escape markdown special characters in username
+      userMention = `@${escapeMarkdownChars(ctx.from.username)}`;
     } else if (ctx.from.first_name) {
-      userMention = ctx.from.first_name;
+      // Escape markdown special characters in first name
+      userMention = escapeMarkdownChars(ctx.from.first_name);
     } else if (ctx.from.last_name) {
-      userMention = ctx.from.last_name;
+      // Escape markdown special characters in last name
+      userMention = escapeMarkdownChars(ctx.from.last_name);
     } else {
       userMention = `User ${ctx.from.id || 'Unknown'}`;
     }
@@ -642,6 +651,66 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   // Safety check for user object
   if (!ctx.from || !ctx.from.id) {
     console.warn('Price command called with invalid user object:', ctx.from);
+    await safeReply(ctx, '❌ Unable to identify user. Please try again.');
+    return;
+  }
+  
+  const userId = ctx.from.id;
+  
+  if (isRateLimited(userId)) {
+    await deleteAndReply(ctx, '⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
+      parse_mode: 'Markdown'
+    });
+    return;
+  }
+  
+  ctx.sendChatAction('typing').catch(() => {});
+  
+  try {
+    const data = await getCombinedData();
+    
+    const message = `
+🚀 *TICS / USDT* (Combined)
+
+💵 **Avg Price:** \`${data.price}\`
+📊 **24h Volume:** \`${data.volume.toLocaleString()} TICS\`
+🟢 **High:** \`${data.high}\` | 🔴 **Low:** \`${data.low}\`
+
+📈 **Exchange Breakdown:**
+🔸 MEXC: \`${data.mexcPrice}\` (${data.mexcVolume.toLocaleString()})
+🔹 LBank: \`${data.lbankPrice}\` (${data.lbankVolume.toLocaleString()})
+`.trim();
+    
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: 'Trade on MEXC', url: 'https://www.mexc.com/exchange/TICS_USDT' },
+          { text: 'Trade on LBank', url: 'https://www.lbank.com/trade/tics_usdt' }
+        ]
+      ]
+    };
+    
+    await deleteAndReply(ctx, message, {
+      parse_mode: 'Markdown',
+      reply_markup: keyboard
+    });
+    
+  } catch (error) {
+    await deleteAndReply(ctx, '❌ *Price unavailable*\n\n🔧 Both exchanges temporarily unavailable', { 
+      parse_mode: 'Markdown'
+    });
+  }
+});
+
+bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
+  if (!isAllowedGroup(ctx)) {
+    await handleUnauthorizedUsage(ctx);
+    return;
+  }
+  
+  // Safety check for user object
+  if (!ctx.from || !ctx.from.id) {
+    console.warn('Check command called with invalid user object:', ctx.from);
     await safeReply(ctx, '❌ Unable to identify user. Please try again.');
     return;
   }
