@@ -7,7 +7,7 @@ const ALLOWED_GROUP_ID = -1002771496854;
 const bot = new Telegraf(BOT_TOKEN);
 
 const QUBETICS_RPC = 'https://rpc.qubetics.com';
-const CEX_THRESHOLD = 1;
+const CEX_THRESHOLD = 15;
 const WHALE_THRESHOLD = 100;
 const CEX_ADDRESSES = {
   'lbank': '0xB9885e76B4FeE07791377f4099d6eD4F3E49c4d0',
