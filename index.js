@@ -73,11 +73,11 @@ function isAllowedGroup(ctx) {
 async function handleUnauthorizedUsage(ctx) {
   const keyboard = {
     inline_keyboard: [
-      [{ text: '🔗 Join TicsDev Group', url: 'https://t.me/TicsDev' }]
+      [{ text: '🔗 Join Tics Lab Group', url: 'https://t.me/TicsLab' }]
     ]
   };
   
-  await safeReply(ctx, '🚫 *Unauthorized Access*\n\nThis bot only works in the TicsDev group.', {
+  await safeReply(ctx, '🚫 *Unauthorized Access*\n\nThis bot only works in the Tics Lab group.', {
     parse_mode: 'Markdown',
     reply_markup: keyboard
   });
