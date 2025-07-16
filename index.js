@@ -3,7 +3,7 @@ import fetch from 'node-fetch';
 import WebSocket from 'ws';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ALLOWED_GROUP_ID = -1002771496854;
+const ALERT_GROUP_ID = -1002771496854; // Tics Lab Group ID for alerts
 const bot = new Telegraf(BOT_TOKEN);
 
 const QUBETICS_RPC = 'https://rpc.qubetics.com';
@@ -11,7 +11,8 @@ const CEX_THRESHOLD = 20;
 const WHALE_THRESHOLD = 100;
 const CEX_ADDRESSES = {
   'lbank': '0xB9885e76B4FeE07791377f4099d6eD4F3E49c4d0',
-  'mexc': '0x05d71131B754d09ffc84E8250419539Fb5BFe8eb'
+  'mexc': '0x05d71131B754d09ffc84E8250419539Fb5BFe8eb',
+  'coinstore': 'YOUR_COINSTORE_CEX_ADDRESS' // IMPORTANT: Replace with the actual Coinstore CEX address
 };
 
 const RATE_LIMIT_WINDOW = 10000;
@@ -20,10 +21,12 @@ const userRateLimit = new Map();
 
 let exchangeData = {
   mexc: { price: null, volume: null, high: null, low: null, timestamp: 0, connected: false },
-  lbank: { price: null, volume: null, high: null, low: null, timestamp: 0, connected: false }
+  lbank: { price: null, volume: null, high: null, low: null, timestamp: 0, connected: false },
+  coinstore: { price: null, volume: null, high: null, low: null, timestamp: 0, connected: false }
 };
 
 let lbankWs = null;
+let coinstoreWs = null;
 let mexcPollingInterval = null;
 let whaleWs = null;
 let lastProcessedBlock = null;
@@ -64,23 +67,6 @@ function isRateLimited(userId) {
   
   userLimit.count++;
   return false;
-}
-
-function isAllowedGroup(ctx) {
-  return ctx.chat.id === ALLOWED_GROUP_ID;
-}
-
-async function handleUnauthorizedUsage(ctx) {
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: '🔗 Join Tics Lab Group', url: 'https://t.me/TicsLab' }]
-    ]
-  };
-  
-  await safeReply(ctx, '🚫 *Unauthorized Access*\n\nThis bot only works in the Tics Lab group.', {
-    parse_mode: 'Markdown',
-    reply_markup: keyboard
-  });
 }
 
 function formatNumber(num) {
@@ -129,7 +115,7 @@ ${emoji} **${action} ${cexName}**
 🔗 [View on Explorer](https://ticsscan.com/tx/${txHash})
 `.trim();
     
-    await bot.telegram.sendMessage(ALLOWED_GROUP_ID, message, {
+    await bot.telegram.sendMessage(ALERT_GROUP_ID, message, {
       parse_mode: 'Markdown',
       disable_web_page_preview: true
     });
@@ -154,7 +140,7 @@ async function sendWhaleAlert(fromAddr, toAddr, amount, usdValue, txHash) {
 🔗 [View on Explorer](https://ticsscan.com/tx/${txHash})
 `.trim();
     
-    await bot.telegram.sendMessage(ALLOWED_GROUP_ID, message, {
+    await bot.telegram.sendMessage(ALERT_GROUP_ID, message, {
       parse_mode: 'Markdown',
       disable_web_page_preview: true
     });
@@ -347,10 +333,10 @@ async function fetchMexcData() {
     if (data.code === 200 && data.data[0]) {
       const ticker = data.data[0];
       exchangeData.mexc = {
-        price: parseFloat(ticker.last).toFixed(4),
+        price: parseFloat(ticker.last),
         volume: parseFloat(ticker.volume),
-        high: parseFloat(ticker.high).toFixed(4),
-        low: parseFloat(ticker.low).toFixed(4),
+        high: parseFloat(ticker.high),
+        low: parseFloat(ticker.low),
         timestamp: Date.now(),
         connected: true
       };
@@ -388,10 +374,10 @@ function connectLBankWebSocket() {
         if (message.type === 'tick' && message.pair === 'tics_usdt' && message.tick) {
           const tickerData = message.tick;
           exchangeData.lbank = {
-            price: parseFloat(tickerData.latest).toFixed(4),
+            price: parseFloat(tickerData.latest),
             volume: parseFloat(tickerData.vol),
-            high: parseFloat(tickerData.high).toFixed(4),
-            low: parseFloat(tickerData.low).toFixed(4),
+            high: parseFloat(tickerData.high),
+            low: parseFloat(tickerData.low),
             timestamp: Date.now(),
             connected: true
           };
@@ -422,10 +408,10 @@ async function fetchLBankREST() {
     if (data.result === 'true' && data.data[0]) {
       const ticker = data.data[0].ticker;
       return {
-        price: parseFloat(ticker.latest).toFixed(4),
+        price: parseFloat(ticker.latest),
         volume: parseFloat(ticker.vol),
-        high: parseFloat(ticker.high).toFixed(4),
-        low: parseFloat(ticker.low).toFixed(4),
+        high: parseFloat(ticker.high),
+        low: parseFloat(ticker.low),
         timestamp: Date.now()
       };
     }
@@ -434,63 +420,152 @@ async function fetchLBankREST() {
   return null;
 }
 
-async function getExchangeData(exchange) {
-  const data = exchangeData[exchange];
-  const now = Date.now();
-  
-  if (data.connected && data.price && (now - data.timestamp) < 30000) {
-    return data;
-  }
-  
-  if (exchange === 'lbank') {
-    const restData = await fetchLBankREST();
-    if (restData) {
-      exchangeData.lbank = { ...restData, connected: false };
-      return exchangeData.lbank;
+function connectCoinstoreWebSocket() {
+    try {
+        coinstoreWs = new WebSocket('wss://ws.coinstore.com/s/v1/ticker');
+
+        coinstoreWs.on('open', () => {
+            console.log('✅ CoinStore WebSocket connected');
+            exchangeData.coinstore.connected = true;
+
+            const subscribeMsg = {
+                "event": "subscribe",
+                "channel": ["ticker_TICSUSDT"]
+            };
+            coinstoreWs.send(JSON.stringify(subscribeMsg));
+        });
+
+        coinstoreWs.on('message', (data) => {
+            try {
+                const message = JSON.parse(data.toString());
+                if (message.channel === 'ticker_TICSUSDT' && message.data) {
+                    const tickerData = message.data;
+                    exchangeData.coinstore = {
+                        price: parseFloat(tickerData.c),
+                        volume: parseFloat(tickerData.v),
+                        high: parseFloat(tickerData.h),
+                        low: parseFloat(tickerData.l),
+                        timestamp: Date.now(),
+                        connected: true
+                    };
+                }
+            } catch (error) {
+            }
+        });
+
+        coinstoreWs.on('close', () => {
+            exchangeData.coinstore.connected = false;
+            setTimeout(connectCoinstoreWebSocket, 5000);
+        });
+
+        coinstoreWs.on('error', (error) => {
+            exchangeData.coinstore.connected = false;
+        });
+
+    } catch (error) {
+        setTimeout(connectCoinstoreWebSocket, 5000);
     }
-  }
-  
-  return null;
+}
+
+async function fetchCoinstoreREST() {
+    try {
+        const response = await fetch('https://api.coinstore.com/api/v1/ticker?symbol=TICSUSDT');
+        const data = await response.json();
+
+        if (data.code === 0 && data.data) {
+            const ticker = data.data;
+            return {
+                price: parseFloat(ticker.close),
+                volume: parseFloat(ticker.volume),
+                high: parseFloat(ticker.high),
+                low: parseFloat(ticker.low),
+                timestamp: Date.now()
+            };
+        }
+    } catch (error) {
+    }
+    return null;
+}
+
+
+async function getExchangeData(exchange) {
+    const data = exchangeData[exchange];
+    const now = Date.now();
+
+    if (data.connected && data.price && (now - data.timestamp) < 30000) {
+        return data;
+    }
+
+    if (exchange === 'lbank') {
+        const restData = await fetchLBankREST();
+        if (restData) {
+            exchangeData.lbank = { ...restData, connected: false };
+            return exchangeData.lbank;
+        }
+    } else if (exchange === 'coinstore') {
+        const restData = await fetchCoinstoreREST();
+        if (restData) {
+            exchangeData.coinstore = { ...restData, connected: false };
+            return exchangeData.coinstore;
+        }
+    }
+    
+    return null;
 }
 
 async function getCombinedData() {
-  const mexcData = exchangeData.mexc.price ? exchangeData.mexc : null;
-  const lbankData = await getExchangeData('lbank');
-  
-  if (!mexcData && !lbankData) {
-    throw new Error('No data available from either exchange');
-  }
-  
-  if (!mexcData) return { ...lbankData, source: 'LBank only' };
-  if (!lbankData) return { ...mexcData, source: 'MEXC only' };
-  
-  const mexcPrice = parseFloat(mexcData.price);
-  const lbankPrice = parseFloat(lbankData.price);
-  const mexcVol = mexcData.volume;
-  const lbankVol = lbankData.volume;
-  
-  const totalVolume = mexcVol + lbankVol;
-  const weightedPrice = ((mexcPrice * mexcVol) + (lbankPrice * lbankVol)) / totalVolume;
-  
-  const avgHigh = ((parseFloat(mexcData.high) + parseFloat(lbankData.high)) / 2);
-  const avgLow = ((parseFloat(mexcData.low) + parseFloat(lbankData.low)) / 2);
-  
-  return {
-    price: weightedPrice.toFixed(4),
-    volume: totalVolume,
-    high: avgHigh.toFixed(4),
-    low: avgLow.toFixed(4),
-    mexcPrice: mexcData.price,
-    lbankPrice: lbankData.price,
-    mexcVolume: mexcVol,
-    lbankVolume: lbankVol,
-    mexcHigh: mexcData.high,
-    mexcLow: mexcData.low,
-    lbankHigh: lbankData.high,
-    lbankLow: lbankData.low,
-    timestamp: Math.max(mexcData.timestamp, lbankData.timestamp),
-    source: 'Combined'
-  };
+    const mexcData = exchangeData.mexc.price ? exchangeData.mexc : null;
+    const lbankData = await getExchangeData('lbank');
+    const coinstoreData = await getExchangeData('coinstore');
+
+    const availableExchanges = [mexcData, lbankData, coinstoreData].filter(d => d && d.price && d.volume > 0);
+
+    if (availableExchanges.length === 0) {
+        throw new Error('No data available from any exchange');
+    }
+
+    if (availableExchanges.length === 1) {
+        let sourceName = '';
+        if (mexcData) sourceName = 'MEXC only';
+        else if (lbankData) sourceName = 'LBank only';
+        else if (coinstoreData) sourceName = 'CoinStore only';
+        return { ...availableExchanges[0], source: sourceName };
+    }
+    
+    let totalVolume = 0;
+    let weightedPriceSum = 0;
+    let highSum = 0;
+    let lowSum = 0;
+    let latestTimestamp = 0;
+
+    for (const data of availableExchanges) {
+        totalVolume += data.volume;
+        weightedPriceSum += data.price * data.volume;
+        highSum += data.high;
+        lowSum += data.low;
+        if (data.timestamp > latestTimestamp) {
+            latestTimestamp = data.timestamp;
+        }
+    }
+
+    const weightedPrice = weightedPriceSum / totalVolume;
+    const avgHigh = highSum / availableExchanges.length;
+    const avgLow = lowSum / availableExchanges.length;
+
+    return {
+        price: weightedPrice.toFixed(4),
+        volume: totalVolume,
+        high: avgHigh.toFixed(4),
+        low: avgLow.toFixed(4),
+        mexcPrice: mexcData?.price.toFixed(4) || 'N/A',
+        lbankPrice: lbankData?.price.toFixed(4) || 'N/A',
+        coinstorePrice: coinstoreData?.price.toFixed(4) || 'N/A',
+        mexcVolume: mexcData?.volume || 0,
+        lbankVolume: lbankData?.volume || 0,
+        coinstoreVolume: coinstoreData?.volume || 0,
+        timestamp: latestTimestamp,
+        source: 'Combined'
+    };
 }
 
 async function fetchWalletData(walletAddress) {
@@ -531,30 +606,20 @@ setInterval(() => {
 }, RATE_LIMIT_WINDOW);
 
 bot.telegram.setMyCommands([
-  { command: 'price', description: 'Get TICS price from both exchanges' },
+  { command: 'price', description: 'Get TICS price from all exchanges' },
   { command: 'check', description: 'Check TICS portfolio (usage: /check wallet_address)' }
 ]);
 
 bot.start(async (ctx) => {
-  if (!isAllowedGroup(ctx)) {
-    await handleUnauthorizedUsage(ctx);
-    return;
-  }
-  
-  await ctx.reply('🎉 *TICS Price Bot Ready!*\n\n📊 Commands:\n/price - Combined data from MEXC + LBank\n/check - Portfolio tracker (usage: /check wallet_address)', 
+  await ctx.reply('🎉 *TICS Price Bot Ready!*\n\n📊 Commands:\n/price - Combined data from MEXC, LBank & CoinStore\n/check - Portfolio tracker (usage: /check wallet_address)', 
     { parse_mode: 'Markdown', reply_to_message_id: ctx.message.message_id });
 });
 
 bot.command(['help', `help@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
-  if (!isAllowedGroup(ctx)) {
-    await handleUnauthorizedUsage(ctx);
-    return;
-  }
-  
   const helpMessage = `
 🤖 *TICS Price Bot*
 
-📊 /price - Combined price from MEXC + LBank
+📊 /price - Combined price from MEXC, LBank & CoinStore
 💼 /check - Portfolio tracker
    Usage: \`/check 0x...\`
   `.trim();
@@ -566,11 +631,6 @@ bot.command(['help', `help@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
 });
 
 bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
-  if (!isAllowedGroup(ctx)) {
-    await handleUnauthorizedUsage(ctx);
-    return;
-  }
-  
   if (!ctx.from || !ctx.from.id) {
     await safeReply(ctx, '❌ Unable to identify user. Please try again.');
     return;
@@ -592,22 +652,24 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
     const data = await getCombinedData();
     
     const message = `
-🚀 *TICS / USDT* (Combined)
+🚀 *TICS / USDT* (${data.source})
 
-💵 **Avg Price:** \`${data.price}\`
-📊 **24h Volume:** \`${data.volume.toLocaleString()} TICS\`
-🟢 **High:** \`${data.high}\` | 🔴 **Low:** \`${data.low}\`
+💵 **Avg Price:** \`$${data.price}\`
+📊 **24h Volume:** \`${formatNumber(data.volume)} TICS\`
+🟢 **High:** \`$${data.high}\` | 🔴 **Low:** \`$${data.low}\`
 
 📈 **Exchange Breakdown:**
-🔸 MEXC: \`${data.mexcPrice}\` (${data.mexcVolume.toLocaleString()})
-🔹 LBank: \`${data.lbankPrice}\` (${data.lbankVolume.toLocaleString()})
+🔸 MEXC: \`$${data.mexcPrice}\` (${formatNumber(data.mexcVolume)})
+🔹 LBank: \`$${data.lbankPrice}\` (${formatNumber(data.lbankVolume)})
+💠 CoinStore: \`$${data.coinstorePrice}\` (${formatNumber(data.coinstoreVolume)})
 `.trim();
     
     const keyboard = {
       inline_keyboard: [
         [
           { text: 'Trade on MEXC', url: 'https://www.mexc.com/exchange/TICS_USDT' },
-          { text: 'Trade on LBank', url: 'https://www.lbank.com/trade/tics_usdt' }
+          { text: 'Trade on LBank', url: 'https://www.lbank.com/trade/tics_usdt' },
+          { text: 'Trade on CoinStore', url: 'https://www.coinstore.com/#/spot/TICSUSDT' }
         ]
       ]
     };
@@ -619,7 +681,7 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
     });
     
   } catch (error) {
-    await ctx.reply('❌ *Price unavailable*\n\n🔧 Both exchanges temporarily unavailable', { 
+    await ctx.reply('❌ *Price unavailable*\n\n🔧 Exchanges temporarily unavailable', { 
       parse_mode: 'Markdown',
       reply_to_message_id: ctx.message.message_id
     });
@@ -627,11 +689,6 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
 });
 
 bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
-  if (!isAllowedGroup(ctx)) {
-    await handleUnauthorizedUsage(ctx);
-    return;
-  }
-  
   if (!ctx.from || !ctx.from.id) {
     await safeReply(ctx, '❌ Unable to identify user. Please try again.');
     return;
@@ -699,7 +756,7 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
 🪙 **Total TICS:** \`${formatNumber(totalTokens)} TICS\`
 💰 **Portfolio Value:** \`$${portfolioValue.toFixed(2)} USDT\`
 
-📊 **Current Price:** \`$${currentPrice}\`
+📊 **Current Price:** \`$${currentPrice.toFixed(4)}\`
 ${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
 
 🎯 **Receiving Address:** \`${shortReceivingAddress}\`
@@ -744,17 +801,18 @@ bot.catch(async (err, ctx) => {
 
 startMexcPolling();
 connectLBankWebSocket();
+connectCoinstoreWebSocket();
 startWhaleMonitoring();
 
 bot.launch();
 console.log('✅ TICS Multi-Exchange Bot running');
-console.log('📡 MEXC: Live polling (2s) | LBank: WebSocket');
+console.log('📡 MEXC: Live polling (2s) | LBank: WebSocket | CoinStore: WebSocket');
 console.log('💼 Portfolio tracker: /check wallet_address');
-console.log('🏦 CEX alerts: 1+ TICS threshold');
+console.log('🏦 CEX alerts: 20+ TICS threshold');
 console.log('🐋 Whale alerts: 100+ TICS threshold');
 
 setInterval(() => {
-  console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: ${exchangeData.lbank.connected ? '✅' : '❌'} | Alerts: ${whaleWs && whaleWs.readyState === 1 ? '✅' : '❌'}`);
+  console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: ${exchangeData.lbank.connected ? '✅' : '❌'} | CoinStore: ${exchangeData.coinstore.connected ? '✅' : '❌'} | Alerts: ${whaleWs && whaleWs.readyState === 1 ? '✅' : '❌'}`);
 }, 300000);
 
 const shutdown = (signal) => {
@@ -762,6 +820,7 @@ const shutdown = (signal) => {
   
   if (mexcPollingInterval) clearInterval(mexcPollingInterval);
   if (lbankWs) lbankWs.close();
+  if (coinstoreWs) coinstoreWs.close();
   if (whaleWs) whaleWs.close();
   
   bot.stop(signal);
