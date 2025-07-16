@@ -557,9 +557,9 @@ async function getCombinedData() {
         volume: totalVolume,
         high: avgHigh.toFixed(4),
         low: avgLow.toFixed(4),
-        mexcPrice: mexcData?.price.toFixed(4) || 'N/A',
-        lbankPrice: lbankData?.price.toFixed(4) || 'N/A',
-        coinstorePrice: coinstoreData?.price.toFixed(4) || 'N/A',
+        mexcPrice: mexcData?.price ? mexcData.price.toFixed(4) : 'N/A',
+        lbankPrice: lbankData?.price ? lbankData.price.toFixed(4) : 'N/A',
+        coinstorePrice: coinstoreData?.price ? coinstoreData.price.toFixed(4) : 'N/A',
         mexcVolume: mexcData?.volume || 0,
         lbankVolume: lbankData?.volume || 0,
         coinstoreVolume: coinstoreData?.volume || 0,
@@ -664,19 +664,8 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
 💠 CoinStore: \`$${data.coinstorePrice}\` (${formatNumber(data.coinstoreVolume)})
 `.trim();
     
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: 'Trade on MEXC', url: 'https://www.mexc.com/exchange/TICS_USDT' },
-          { text: 'Trade on LBank', url: 'https://www.lbank.com/trade/tics_usdt' },
-          { text: 'Trade on CoinStore', url: 'https://www.coinstore.com/#/spot/TICSUSDT' }
-        ]
-      ]
-    };
-    
     await ctx.reply(message, {
       parse_mode: 'Markdown',
-      reply_markup: keyboard,
       reply_to_message_id: ctx.message.message_id
     });
     
