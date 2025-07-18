@@ -1,10 +1,10 @@
 import { Telegraf } from 'telegraf';
 import fetch from 'node-fetch';
 import WebSocket from 'ws';
-import puppeteer from 'puppeteer'; // Import Puppeteer
+import puppeteer from 'puppeteer';
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ALERT_GROUP_ID = -1002771496854; // Tics Lab Group ID for alerts
+const ALERT_GROUP_ID = -1002771496854; 
 const bot = new Telegraf(BOT_TOKEN);
 
 const QUBETICS_RPC = 'https://rpc.qubetics.com';
@@ -13,7 +13,7 @@ const WHALE_THRESHOLD = 100;
 const CEX_ADDRESSES = {
   'lbank': '0xB9885e76B4FeE07791377f4099d6eD4F3E49c4d0',
   'mexc': '0x05d71131B754d09ffc84E8250419539Fb5BFe8eb',
-  'coinstore': 'YOUR_COINSTORE_CEX_ADDRESS' // IMPORTANT: Replace with the actual Coinstore CEX address
+  'coinstore': '0x86790abbaCcD1B21F5ecFDaA67EC6282AFbf3E83' 
 };
 
 const RATE_LIMIT_WINDOW = 10000;
@@ -718,6 +718,12 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
 });
 
 bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
+  // Delete the user's message for privacy.
+  // Add a catch block to prevent crashes if the bot can't delete messages.
+  ctx.deleteMessage().catch(err => {
+    console.error("Could not delete message. Bot might not have permissions.", err);
+  });
+
   if (!ctx.from || !ctx.from.id) {
     await safeReply(ctx, '❌ Unable to identify user. Please try again.');
     return;
@@ -727,8 +733,7 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   
   if (isRateLimited(userId)) {
     await ctx.reply('⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', {
-      parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id
+      parse_mode: 'Markdown'
     });
     return;
   }
@@ -737,8 +742,7 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   
   if (input.length < 2) {
     await ctx.reply('❌ *Invalid usage*\n\nPlease provide a wallet address:\n`/check 0x...`', {
-      parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id
+      parse_mode: 'Markdown'
     });
     return;
   }
@@ -747,8 +751,7 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   
   if (!isValidWalletAddress(walletAddress)) {
     await ctx.reply('❌ *Invalid wallet address*\n\nPlease provide a valid Ethereum wallet address (0x...)', {
-      parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id
+      parse_mode: 'Markdown'
     });
     return;
   }
@@ -763,8 +766,7 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
     
     if (!priceData || !priceData.price) {
       await ctx.reply('❌ *Price data unavailable*\n\nCannot calculate portfolio value - price feeds are down', {
-        parse_mode: 'Markdown',
-        reply_to_message_id: ctx.message.message_id
+        parse_mode: 'Markdown'
       });
       return;
     }
@@ -792,20 +794,17 @@ ${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
 `.trim();
     
     await ctx.reply(message, {
-      parse_mode: 'Markdown',
-      reply_to_message_id: ctx.message.message_id
+      parse_mode: 'Markdown'
     });
     
   } catch (error) {
     if (error.message === 'WALLET_NOT_FOUND') {
       await ctx.reply('❌ *Wallet not found*\n\nThis wallet address has no TICS holdings or doesn\'t exist in the system.', {
-        parse_mode: 'Markdown',
-        reply_to_message_id: ctx.message.message_id
+        parse_mode: 'Markdown'
       });
     } else {
       await ctx.reply('❌ *Portfolio check failed*\n\nUnable to fetch wallet data. Please try again later.', {
-        parse_mode: 'Markdown',
-        reply_to_message_id: ctx.message.message_id
+        parse_mode: 'Markdown'
       });
     }
   }
