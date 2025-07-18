@@ -1,6 +1,7 @@
 import { Telegraf } from 'telegraf';
 import fetch from 'node-fetch';
 import WebSocket from 'ws';
+import puppeteer from 'puppeteer'; // Import Puppeteer
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ALERT_GROUP_ID = -1002771496854; // Tics Lab Group ID for alerts
@@ -467,24 +468,60 @@ function connectCoinstoreWebSocket() {
     }
 }
 
+/**
+ * NEW: Fetches Coinstore data using Puppeteer to simulate a browser.
+ * This is a fallback for when the WebSocket or direct API fetch fails.
+ */
 async function fetchCoinstoreREST() {
+    console.log('Attempting to fetch Coinstore data with Puppeteer...');
+    let browser = null;
     try {
-        const response = await fetch('https://api.coinstore.com/api/v1/ticker?symbol=TICSUSDT');
-        const data = await response.json();
+        browser = await puppeteer.launch({
+            headless: 'new',
+            args: ['--no-sandbox', '--disable-setuid-sandbox'] // Arguments for running in restricted environments
+        });
 
-        if (data.code === 0 && data.data) {
-            const ticker = data.data;
+        const page = await browser.newPage();
+
+        // Set a realistic user agent
+        await page.setUserAgent(
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+        );
+
+        // Go to the API endpoint
+        await page.goto('https://api.coinstore.com/api/v1/market/tickers', {
+            waitUntil: 'networkidle0', // Wait until the network is quiet
+            timeout: 60000 // Increase timeout to 60 seconds
+        });
+
+        // Extract the text content from the page body
+        const body = await page.evaluate(() => document.body.innerText);
+        const json = JSON.parse(body);
+
+        // Find the TICSUSDT ticker data
+        const tics = json.data.find(item => item.symbol === 'TICSUSDT');
+
+        if (tics) {
+            console.log('Successfully fetched TICSUSDT data via Puppeteer.');
             return {
-                price: parseFloat(ticker.close),
-                volume: parseFloat(ticker.volume),
-                high: parseFloat(ticker.high),
-                low: parseFloat(ticker.low),
+                price: parseFloat(tics.close),
+                volume: parseFloat(tics.volume),
+                high: parseFloat(tics.high),
+                low: parseFloat(tics.low),
                 timestamp: Date.now()
             };
+        } else {
+            console.error('❌ TICSUSDT not found in Puppeteer response.');
+            return null;
         }
     } catch (error) {
+        console.error('Error during Puppeteer fetch for Coinstore:', error);
+        return null; // Return null on failure
+    } finally {
+        if (browser) {
+            await browser.close(); // Ensure the browser is closed
+        }
     }
-    return null;
 }
 
 
@@ -492,25 +529,28 @@ async function getExchangeData(exchange) {
     const data = exchangeData[exchange];
     const now = Date.now();
 
+    // Use fresh WebSocket data if available
     if (data.connected && data.price && (now - data.timestamp) < 30000) {
         return data;
     }
 
+    // Fallback to REST/Puppeteer if WebSocket data is stale or unavailable
     if (exchange === 'lbank') {
         const restData = await fetchLBankREST();
         if (restData) {
-            exchangeData.lbank = { ...restData, connected: false };
+            exchangeData.lbank = { ...restData, connected: false }; // Mark as not connected via WS
             return exchangeData.lbank;
         }
     } else if (exchange === 'coinstore') {
+        // Use the new Puppeteer function for Coinstore
         const restData = await fetchCoinstoreREST();
         if (restData) {
-            exchangeData.coinstore = { ...restData, connected: false };
+            exchangeData.coinstore = { ...restData, connected: false }; // Mark as not connected via WS
             return exchangeData.coinstore;
         }
     }
     
-    return null;
+    return null; // Return null if all methods fail
 }
 
 async function getCombinedData() {
@@ -795,7 +835,7 @@ startWhaleMonitoring();
 
 bot.launch();
 console.log('✅ TICS Multi-Exchange Bot running');
-console.log('📡 MEXC: Live polling (2s) | LBank: WebSocket | CoinStore: WebSocket');
+console.log('📡 MEXC: Live polling (2s) | LBank: WebSocket | CoinStore: WebSocket/Puppeteer');
 console.log('💼 Portfolio tracker: /check wallet_address');
 console.log('🏦 CEX alerts: 20+ TICS threshold');
 console.log('🐋 Whale alerts: 100+ TICS threshold');
