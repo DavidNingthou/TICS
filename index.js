@@ -133,7 +133,7 @@ async function sendWhaleAlert(fromAddr, toAddr, amount, usdValue, txHash) {
     const message = `
 🐋 *WHALE ALERT*
 
-💸 **Large Transfer**
+💸 **Large Native TICS Transfer**
 📤 **From:** \`${shortFrom}\`
 📥 **To:** \`${shortTo}\`
 🪙 **Amount:** \`${formatNumber(amount)} TICS\`
@@ -165,46 +165,8 @@ async function processTransaction(tx) {
           amount: amount,
           type: 'native'
         });
+        console.log(`🪙 Native TICS transfer detected: ${amount.toFixed(2)} TICS`);
       }
-    }
-    
-    try {
-      const receiptResponse = await fetch(QUBETICS_RPC, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          method: 'eth_getTransactionReceipt',
-          params: [tx.hash],
-          id: 1
-        })
-      });
-      
-      const receiptData = await receiptResponse.json();
-      if (receiptData.result && receiptData.result.logs) {
-        for (const log of receiptData.result.logs) {
-          if (log.topics && log.topics[0] === '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef') {
-            if (log.topics.length >= 3 && log.data && log.data !== '0x') {
-              try {
-                const fromAddr = '0x' + log.topics[1].slice(-40);
-                const toAddr = '0x' + log.topics[2].slice(-40);
-                const amount = weiToTics(log.data);
-                
-                if (amount >= CEX_THRESHOLD) {
-                  detectedTransfers.push({
-                    from: fromAddr.toLowerCase(),
-                    to: toAddr.toLowerCase(),
-                    amount: amount,
-                    type: 'contract'
-                  });
-                }
-              } catch (logError) {
-              }
-            }
-          }
-        }
-      }
-    } catch (receiptError) {
     }
     
     const currentPrice = await getCurrentPrice();
@@ -366,37 +328,67 @@ function connectLBankWebSocket() {
         pair: "tics_usdt"
       };
       lbankWs.send(JSON.stringify(subscribeMsg));
+      
+      const pingInterval = setInterval(() => {
+        if (lbankWs && lbankWs.readyState === WebSocket.OPEN) {
+          lbankWs.send(JSON.stringify({ action: "ping" }));
+        } else {
+          clearInterval(pingInterval);
+        }
+      }, 30000);
     });
     
     lbankWs.on('message', (data) => {
       try {
         const message = JSON.parse(data.toString());
         
+        if (message.pong) {
+          return;
+        }
+        
         if (message.type === 'tick' && message.pair === 'tics_usdt' && message.tick) {
           const tickerData = message.tick;
-          exchangeData.lbank = {
-            price: parseFloat(tickerData.latest),
-            volume: parseFloat(tickerData.vol),
-            high: parseFloat(tickerData.high),
-            low: parseFloat(tickerData.low),
-            timestamp: Date.now(),
-            connected: true
-          };
+          
+          const price = parseFloat(tickerData.latest);
+          const volume = parseFloat(tickerData.vol);
+          const high = parseFloat(tickerData.high);
+          const low = parseFloat(tickerData.low);
+          
+          if (!isNaN(price) && price > 0 && !isNaN(volume) && volume >= 0) {
+            exchangeData.lbank = {
+              price: price,
+              volume: volume,
+              high: !isNaN(high) ? high : price,
+              low: !isNaN(low) ? low : price,
+              timestamp: Date.now(),
+              connected: true
+            };
+            console.log(`📈 LBank WS: $${price.toFixed(4)}, Vol: ${volume.toFixed(0)}`);
+          } else {
+            console.log('⚠️ LBank WS: Invalid ticker data received');
+            exchangeData.lbank.connected = false;
+          }
         }
       } catch (error) {
+        console.error('LBank WebSocket message parsing error:', error);
+        exchangeData.lbank.connected = false;
       }
     });
     
-    lbankWs.on('close', () => {
+    lbankWs.on('close', (code, reason) => {
+      console.log(`🔄 LBank WebSocket disconnected (${code}: ${reason}), reconnecting...`);
       exchangeData.lbank.connected = false;
       setTimeout(connectLBankWebSocket, 5000);
     });
     
     lbankWs.on('error', (error) => {
+      console.error('LBank WebSocket error:', error);
       exchangeData.lbank.connected = false;
     });
     
   } catch (error) {
+    console.error('Failed to start LBank WebSocket:', error);
+    exchangeData.lbank.connected = false;
     setTimeout(connectLBankWebSocket, 5000);
   }
 }
@@ -468,37 +460,29 @@ function connectCoinstoreWebSocket() {
     }
 }
 
-/**
- * NEW: Fetches Coinstore data using Puppeteer to simulate a browser.
- * This is a fallback for when the WebSocket or direct API fetch fails.
- */
 async function fetchCoinstoreREST() {
     console.log('Attempting to fetch Coinstore data with Puppeteer...');
     let browser = null;
     try {
         browser = await puppeteer.launch({
             headless: 'new',
-            args: ['--no-sandbox', '--disable-setuid-sandbox'] // Arguments for running in restricted environments
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
         });
 
         const page = await browser.newPage();
 
-        // Set a realistic user agent
         await page.setUserAgent(
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
         );
 
-        // Go to the API endpoint
         await page.goto('https://api.coinstore.com/api/v1/market/tickers', {
-            waitUntil: 'networkidle0', // Wait until the network is quiet
-            timeout: 60000 // Increase timeout to 60 seconds
+            waitUntil: 'networkidle0',
+            timeout: 60000
         });
 
-        // Extract the text content from the page body
         const body = await page.evaluate(() => document.body.innerText);
         const json = JSON.parse(body);
 
-        // Find the TICSUSDT ticker data
         const tics = json.data.find(item => item.symbol === 'TICSUSDT');
 
         if (tics) {
@@ -516,59 +500,59 @@ async function fetchCoinstoreREST() {
         }
     } catch (error) {
         console.error('Error during Puppeteer fetch for Coinstore:', error);
-        return null; // Return null on failure
+        return null;
     } finally {
         if (browser) {
-            await browser.close(); // Ensure the browser is closed
+            await browser.close();
         }
     }
 }
-
 
 async function getExchangeData(exchange) {
     const data = exchangeData[exchange];
     const now = Date.now();
 
-    // Use fresh WebSocket data if available
     if (data.connected && data.price && (now - data.timestamp) < 30000) {
         return data;
     }
 
-    // Fallback to REST/Puppeteer if WebSocket data is stale or unavailable
     if (exchange === 'lbank') {
         const restData = await fetchLBankREST();
         if (restData) {
-            exchangeData.lbank = { ...restData, connected: false }; // Mark as not connected via WS
+            exchangeData.lbank = { ...restData, connected: false };
             return exchangeData.lbank;
         }
     } else if (exchange === 'coinstore') {
-        // Use the new Puppeteer function for Coinstore
         const restData = await fetchCoinstoreREST();
         if (restData) {
-            exchangeData.coinstore = { ...restData, connected: false }; // Mark as not connected via WS
+            exchangeData.coinstore = { ...restData, connected: false };
             return exchangeData.coinstore;
         }
     }
     
-    return null; // Return null if all methods fail
+    return null;
 }
 
 async function getCombinedData() {
-    const mexcData = exchangeData.mexc.price ? exchangeData.mexc : null;
+    const mexcData = (exchangeData.mexc.price && exchangeData.mexc.price > 0) ? exchangeData.mexc : null;
+    
     const lbankData = await getExchangeData('lbank');
+    const validLbankData = (lbankData && lbankData.price && lbankData.price > 0) ? lbankData : null;
+    
     const coinstoreData = await getExchangeData('coinstore');
+    const validCoinstoreData = (coinstoreData && coinstoreData.price && coinstoreData.price > 0) ? coinstoreData : null;
 
-    const availableExchanges = [mexcData, lbankData, coinstoreData].filter(d => d && d.price && d.volume > 0);
+    const availableExchanges = [mexcData, validLbankData, validCoinstoreData].filter(d => d && d.price && d.volume >= 0);
 
     if (availableExchanges.length === 0) {
-        throw new Error('No data available from any exchange');
+        throw new Error('No valid data available from any exchange');
     }
 
     if (availableExchanges.length === 1) {
         let sourceName = '';
         if (mexcData) sourceName = 'MEXC only';
-        else if (lbankData) sourceName = 'LBank only';
-        else if (coinstoreData) sourceName = 'CoinStore only';
+        else if (validLbankData) sourceName = 'LBank only';
+        else if (validCoinstoreData) sourceName = 'CoinStore only';
         return { ...availableExchanges[0], source: sourceName };
     }
     
@@ -588,7 +572,7 @@ async function getCombinedData() {
         }
     }
 
-    const weightedPrice = weightedPriceSum / totalVolume;
+    const weightedPrice = totalVolume > 0 ? weightedPriceSum / totalVolume : availableExchanges[0].price;
     const avgHigh = highSum / availableExchanges.length;
     const avgLow = lowSum / availableExchanges.length;
 
@@ -598,11 +582,11 @@ async function getCombinedData() {
         high: avgHigh.toFixed(4),
         low: avgLow.toFixed(4),
         mexcPrice: mexcData?.price ? mexcData.price.toFixed(4) : 'N/A',
-        lbankPrice: lbankData?.price ? lbankData.price.toFixed(4) : 'N/A',
-        coinstorePrice: coinstoreData?.price ? coinstoreData.price.toFixed(4) : 'N/A',
+        lbankPrice: validLbankData?.price ? validLbankData.price.toFixed(4) : 'N/A',
+        coinstorePrice: validCoinstoreData?.price ? validCoinstoreData.price.toFixed(4) : 'N/A',
         mexcVolume: mexcData?.volume || 0,
-        lbankVolume: lbankData?.volume || 0,
-        coinstoreVolume: coinstoreData?.volume || 0,
+        lbankVolume: validLbankData?.volume || 0,
+        coinstoreVolume: validCoinstoreData?.volume || 0,
         timestamp: latestTimestamp,
         source: 'Combined'
     };
@@ -718,8 +702,6 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
 });
 
 bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
-  // Delete the user's message for privacy.
-  // Add a catch block to prevent crashes if the bot can't delete messages.
   ctx.deleteMessage().catch(err => {
     console.error("Could not delete message. Bot might not have permissions.", err);
   });
