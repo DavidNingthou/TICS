@@ -317,6 +317,8 @@ function startMexcPolling() {
 function connectLBankWebSocket() {
   try {
     lbankWs = new WebSocket('wss://www.lbkex.net/ws/V2/');
+    let pingInterval = null;
+    let dataTimeout = null;
     
     lbankWs.on('open', () => {
       console.log('✅ LBank WebSocket connected');
@@ -328,26 +330,37 @@ function connectLBankWebSocket() {
         pair: "tics_usdt"
       };
       lbankWs.send(JSON.stringify(subscribeMsg));
+      console.log('📡 LBank: Subscribed to tics_usdt ticker');
       
-      const pingInterval = setInterval(() => {
+      pingInterval = setInterval(() => {
         if (lbankWs && lbankWs.readyState === WebSocket.OPEN) {
           lbankWs.send(JSON.stringify({ action: "ping" }));
         } else {
           clearInterval(pingInterval);
         }
       }, 30000);
+      
+      dataTimeout = setTimeout(() => {
+        if (exchangeData.lbank.connected && (!exchangeData.lbank.price || exchangeData.lbank.price === 0)) {
+          console.log('⚠️ LBank WS: No data received after 10s, marking as disconnected');
+          exchangeData.lbank.connected = false;
+        }
+      }, 10000);
     });
     
     lbankWs.on('message', (data) => {
       try {
         const message = JSON.parse(data.toString());
+        console.log('📨 LBank WS message:', JSON.stringify(message));
         
         if (message.pong) {
+          console.log('🏓 LBank pong received');
           return;
         }
         
         if (message.type === 'tick' && message.pair === 'tics_usdt' && message.tick) {
           const tickerData = message.tick;
+          console.log('📊 LBank ticker data:', JSON.stringify(tickerData));
           
           const price = parseFloat(tickerData.latest);
           const volume = parseFloat(tickerData.vol);
@@ -363,11 +376,17 @@ function connectLBankWebSocket() {
               timestamp: Date.now(),
               connected: true
             };
-            console.log(`📈 LBank WS: $${price.toFixed(4)}, Vol: ${volume.toFixed(0)}`);
+            console.log(`📈 LBank WS: ${price.toFixed(4)}, Vol: ${volume.toFixed(0)}`);
+            if (dataTimeout) {
+              clearTimeout(dataTimeout);
+              dataTimeout = null;
+            }
           } else {
-            console.log('⚠️ LBank WS: Invalid ticker data received');
+            console.log('⚠️ LBank WS: Invalid ticker data - price:', price, 'volume:', volume);
             exchangeData.lbank.connected = false;
           }
+        } else if (message.type) {
+          console.log(`📩 LBank WS: Other message type: ${message.type}`);
         }
       } catch (error) {
         console.error('LBank WebSocket message parsing error:', error);
@@ -378,12 +397,16 @@ function connectLBankWebSocket() {
     lbankWs.on('close', (code, reason) => {
       console.log(`🔄 LBank WebSocket disconnected (${code}: ${reason}), reconnecting...`);
       exchangeData.lbank.connected = false;
+      if (pingInterval) clearInterval(pingInterval);
+      if (dataTimeout) clearTimeout(dataTimeout);
       setTimeout(connectLBankWebSocket, 5000);
     });
     
     lbankWs.on('error', (error) => {
       console.error('LBank WebSocket error:', error);
       exchangeData.lbank.connected = false;
+      if (pingInterval) clearInterval(pingInterval);
+      if (dataTimeout) clearTimeout(dataTimeout);
     });
     
   } catch (error) {
@@ -395,20 +418,41 @@ function connectLBankWebSocket() {
 
 async function fetchLBankREST() {
   try {
-    const response = await fetch('https://api.lbank.info/v2/ticker.do?symbol=tics_usdt');
-    const data = await response.json();
+    console.log('🔄 LBank: Trying REST API...');
+    const response = await fetch('https://api.lbank.info/v2/ticker.do?symbol=tics_usdt', {
+      timeout: 10000,
+      headers: { 'User-Agent': 'TICS-Bot/3.0' }
+    });
     
-    if (data.result === 'true' && data.data[0]) {
+    if (!response.ok) {
+      console.log(`❌ LBank REST: HTTP ${response.status}`);
+      return null;
+    }
+    
+    const data = await response.json();
+    console.log('📨 LBank REST response:', JSON.stringify(data));
+    
+    if (data.result === 'true' && data.data && data.data[0] && data.data[0].ticker) {
       const ticker = data.data[0].ticker;
-      return {
-        price: parseFloat(ticker.latest),
-        volume: parseFloat(ticker.vol),
-        high: parseFloat(ticker.high),
-        low: parseFloat(ticker.low),
-        timestamp: Date.now()
-      };
+      const price = parseFloat(ticker.latest);
+      const volume = parseFloat(ticker.vol);
+      
+      if (!isNaN(price) && price > 0) {
+        return {
+          price: price,
+          volume: !isNaN(volume) ? volume : 0,
+          high: parseFloat(ticker.high) || price,
+          low: parseFloat(ticker.low) || price,
+          timestamp: Date.now()
+        };
+      } else {
+        console.log('❌ LBank REST: Invalid price data:', price);
+      }
+    } else {
+      console.log('❌ LBank REST: Invalid response structure');
     }
   } catch (error) {
+    console.error('❌ LBank REST error:', error.message);
   }
   return null;
 }
@@ -512,21 +556,30 @@ async function getExchangeData(exchange) {
     const data = exchangeData[exchange];
     const now = Date.now();
 
-    if (data.connected && data.price && (now - data.timestamp) < 30000) {
+    if (data.connected && data.price && data.price > 0 && (now - data.timestamp) < 30000) {
+        console.log(`📊 ${exchange}: Using WebSocket data - ${data.price.toFixed(4)}`);
         return data;
     }
 
+    console.log(`🔄 ${exchange}: WebSocket data stale/invalid, trying REST API...`);
+    
     if (exchange === 'lbank') {
         const restData = await fetchLBankREST();
-        if (restData) {
+        if (restData && restData.price > 0) {
+            console.log(`📈 LBank REST: ${restData.price.toFixed(4)}, Vol: ${restData.volume.toFixed(0)}`);
             exchangeData.lbank = { ...restData, connected: false };
             return exchangeData.lbank;
+        } else {
+            console.log('❌ LBank REST: Failed to get valid data');
         }
     } else if (exchange === 'coinstore') {
         const restData = await fetchCoinstoreREST();
-        if (restData) {
+        if (restData && restData.price > 0) {
+            console.log(`📈 CoinStore REST: ${restData.price.toFixed(4)}, Vol: ${restData.volume.toFixed(0)}`);
             exchangeData.coinstore = { ...restData, connected: false };
             return exchangeData.coinstore;
+        } else {
+            console.log('❌ CoinStore REST: Failed to get valid data');
         }
     }
     
