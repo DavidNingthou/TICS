@@ -477,16 +477,7 @@ async function getExchangeData(exchange) {
     const data = exchangeData[exchange];
     const now = Date.now();
 
-    // For LBank, we now rely on the scraper's "connected" status
-    if (exchange === 'lbank') {
-        // --- FIX: Directly return the data if the scraper says it's connected ---
-        if (data.connected && data.price) {
-            return data;
-        }
-        return null; 
-    }
-
-    // Existing logic for CoinStore
+    // This function now only handles the fallback for CoinStore
     if (exchange === 'coinstore') {
        if (data.connected && data.price && (now - data.timestamp) < 30000) {
            return data;
@@ -502,9 +493,10 @@ async function getExchangeData(exchange) {
 }
 
 async function getCombinedData() {
-    const mexcData = (exchangeData.mexc.price && exchangeData.mexc.price > 0) ? exchangeData.mexc : null;
-    const lbankData = await getExchangeData('lbank');
-    const coinstoreData = await getExchangeData('coinstore');
+    // --- FIX: Read directly from the global exchangeData object for all sources ---
+    const mexcData = (exchangeData.mexc.connected && exchangeData.mexc.price > 0) ? exchangeData.mexc : null;
+    const lbankData = (exchangeData.lbank.connected && exchangeData.lbank.price > 0) ? exchangeData.lbank : null;
+    const coinstoreData = await getExchangeData('coinstore'); // Keep fallback for coinstore
 
     const availableExchanges = [mexcData, lbankData, coinstoreData].filter(d => d && d.price && d.volume >= 0);
 
