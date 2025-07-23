@@ -30,6 +30,8 @@ let coinstoreWs = null;
 let mexcPollingInterval = null;
 let whaleWs = null;
 let lastProcessedBlock = null;
+let lbankBrowser = null;
+let lbankPage = null;
 
 async function safeReply(ctx, message, options = {}) {
   try {
@@ -314,8 +316,8 @@ function startMexcPolling() {
 }
 
 function connectLBankWebSocket() {
-  console.log('🔄 LBank: Using Puppeteer scraping only');
-  exchangeData.lbank.connected = false;
+  console.log('🔄 LBank: Initializing persistent browser for real-time scraping');
+  initLBankBrowser();
 }
 
 async function fetchLBankPuppeteer() {
@@ -866,13 +868,13 @@ startWhaleMonitoring();
 
 bot.launch();
 console.log('✅ TICS Multi-Exchange Bot running');
-console.log('📡 MEXC: Live polling (2s) | LBank: Puppeteer scraping | CoinStore: WebSocket/Puppeteer');
+console.log('📡 MEXC: Live polling (2s) | LBank: Persistent browser scraping | CoinStore: WebSocket/Puppeteer');
 console.log('💼 Portfolio tracker: /check wallet_address');
 console.log('🏦 CEX alerts: 20+ TICS threshold');
 console.log('🐋 Whale alerts: 100+ TICS threshold');
 
 setInterval(() => {
-  console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: Puppeteer | CoinStore: ${exchangeData.coinstore.connected ? '✅' : '❌'} | Alerts: ${whaleWs && whaleWs.readyState === 1 ? '✅' : '❌'}`);
+  console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: ${exchangeData.lbank.connected ? '✅' : '❌'} Browser | CoinStore: ${exchangeData.coinstore.connected ? '✅' : '❌'} | Alerts: ${whaleWs && whaleWs.readyState === 1 ? '✅' : '❌'}`);
 }, 300000);
 
 const shutdown = (signal) => {
@@ -881,6 +883,11 @@ const shutdown = (signal) => {
   if (mexcPollingInterval) clearInterval(mexcPollingInterval);
   if (coinstoreWs) coinstoreWs.close();
   if (whaleWs) whaleWs.close();
+  
+  // Close LBank browser
+  if (lbankBrowser) {
+    closeLBankBrowser();
+  }
   
   bot.stop(signal);
   process.exit(0);
