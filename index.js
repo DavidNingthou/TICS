@@ -475,7 +475,35 @@ async function fetchWalletData(walletAddress) {
   }
 }
 
-// --- CORRECTED VALIDATOR FUNCTION ---
+// --- NEW ADDRESS DATA FUNCTION ---
+async function fetchAddressData(address) {
+    try {
+        const [detailsRes, tokensRes] = await Promise.all([
+            fetch(`https://evm-api.qubetics.com/qubetics/explorer/address-detail/${address}`),
+            fetch(`https://evm-api.qubetics.com/qubetics/tokens/token-by-wallet-address?address=${address}&page=1&limit=10`)
+        ]);
+
+        if (!detailsRes.ok) throw new Error(`Address details API Error: ${detailsRes.status}`);
+        if (!tokensRes.ok) throw new Error(`Token holdings API Error: ${tokensRes.status}`);
+
+        const detailsData = await detailsRes.json();
+        const tokensData = await tokensRes.json();
+
+        if (detailsData.error || tokensData.error) {
+            throw new Error('API returned an error');
+        }
+
+        return {
+            details: detailsData.data,
+            tokens: tokensData.data.contractDetails || []
+        };
+    } catch (error) {
+        console.error('Failed to fetch address data:', error);
+        throw error;
+    }
+}
+
+
 async function fetchValidatorsData() {
   try {
     const response = await fetch('https://evm-api.qubetics.com/qubetics/validators/getAllValidators?page=1&limit=100', {
@@ -519,11 +547,12 @@ setInterval(() => {
 bot.telegram.setMyCommands([
   { command: 'price', description: 'Get TICS price from all exchanges' },
   { command: 'check', description: 'Check TICS portfolio (usage: /check wallet_address)' },
-  { command: 'validators', description: 'Show top network validators' }
+  { command: 'validators', description: 'Show top network validators' },
+  { command: 'address', description: 'Check a Qubetics mainnet address' }
 ]);
 
 bot.start(async (ctx) => {
-  await ctx.reply('🎉 *TICS Price Bot Ready!*\n\n📊 Commands:\n/price - Combined data from MEXC, LBank & CoinStore\n/check - Portfolio tracker (usage: /check wallet_address)\n/validators - Network validator list', 
+  await ctx.reply('🎉 *TICS Price Bot Ready!*\n\n📊 Commands:\n/price - Combined data from MEXC, LBank & CoinStore\n/check - Portfolio tracker\n/validators - Network validator list\n/address - Check mainnet address', 
     { parse_mode: 'Markdown', reply_to_message_id: ctx.message.message_id });
 });
 
@@ -535,6 +564,8 @@ bot.command(['help', `help@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
 💼 /check - Portfolio tracker
    Usage: \`/check 0x...\`
 ⛓️ /validators - Show top network validators
+📍 /address - Check a Qubetics mainnet address
+   Usage: \`/address 0x...\`
   `.trim();
   
   await ctx.reply(helpMessage, { 
@@ -679,7 +710,6 @@ ${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
   }
 });
 
-// --- NEW VALIDATORS COMMAND ---
 bot.command(['validators', `validators@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
   ctx.sendChatAction('typing').catch(() => {});
 
@@ -723,6 +753,63 @@ bot.command(['validators', `validators@${BOT_TOKEN.split(':')[0]}`], async (ctx)
       parse_mode: 'Markdown'
     });
   }
+});
+
+// --- NEW ADDRESS COMMAND ---
+bot.command(['address', `address@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
+    if (!ctx.from || !ctx.from.id) {
+        await safeReply(ctx, '❌ Unable to identify user. Please try again.');
+        return;
+    }
+
+    const userId = ctx.from.id;
+    if (isRateLimited(userId)) {
+        await ctx.reply('⏱️ *Too many requests*\n\nPlease wait a moment before requesting again.', { parse_mode: 'Markdown' });
+        return;
+    }
+
+    const input = ctx.message.text.split(' ');
+    if (input.length < 2) {
+        await ctx.reply('❌ *Invalid usage*\n\nPlease provide an address:\n`/address 0x...`', { parse_mode: 'Markdown' });
+        return;
+    }
+
+    const address = input[1].trim();
+    if (!isValidWalletAddress(address)) {
+        await ctx.reply('❌ *Invalid wallet address*\n\nPlease provide a valid Ethereum wallet address (0x...)', { parse_mode: 'Markdown' });
+        return;
+    }
+
+    ctx.sendChatAction('typing').catch(() => {});
+
+    try {
+        const { details, tokens } = await fetchAddressData(address);
+        const shortAddress = `${address.slice(0, 6)}...${address.slice(-4)}`;
+
+        let message = `📍 *Address Details*\n\n`;
+        message += `Address: \`${shortAddress}\`\n`;
+        message += `Balance: \`${parseFloat(details.coinBalance).toFixed(4)} TICS\`\n`;
+        message += `Value: \`$${parseFloat(details.value).toFixed(2)} USD\`\n`;
+        message += `Transactions: \`${details.transactionCount}\`\n\n`;
+        message += `*Token Holdings (${tokens.length})*:\n`;
+
+        if (tokens.length > 0) {
+            tokens.forEach(token => {
+                const balance = token.tokenBalance ? formatNumber(parseFloat(token.tokenBalance)) : 'N/A';
+                const symbol = token.tokenSymbol || 'Unknown Token';
+                const shortContract = `${token.contractAddress.slice(0, 6)}...${token.contractAddress.slice(-4)}`;
+                message += `- \`${balance} ${symbol}\` (\`${shortContract}\`)\n`;
+            });
+        } else {
+            message += `_No token holdings found._`;
+        }
+
+        await ctx.reply(message, { parse_mode: 'Markdown' });
+
+    } catch (error) {
+        console.error('Address command error:', error);
+        await ctx.reply('❌ *Address data unavailable*\n\nCould not fetch information for this address. It may not exist on the Qubetics mainnet.', { parse_mode: 'Markdown' });
+    }
 });
 
 
