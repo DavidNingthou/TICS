@@ -475,21 +475,28 @@ async function fetchWalletData(walletAddress) {
   }
 }
 
-// --- NEW VALIDATOR FUNCTION ---
+// --- CORRECTED VALIDATOR FUNCTION ---
 async function fetchValidatorsData() {
   try {
-    const response = await fetch('https://api.ticsscan.com/v1/validators', {
+    const response = await fetch(`${QUBETICS_RPC}/validators`, {
       timeout: 10000,
       headers: { 'User-Agent': 'TICS-Bot/3.0' }
     });
     if (!response.ok) {
-      throw new Error(`Validator API Error: ${response.status}`);
+      throw new Error(`Validator RPC Error: ${response.status}`);
     }
     const data = await response.json();
-    if (!data || !data.data || !data.data.validators) {
-        throw new Error('Invalid validator API response structure');
+    if (!data || !data.result || !data.result.validators) {
+        throw new Error('Invalid validator RPC response structure');
     }
-    return data.data; 
+    
+    // Calculate total voting power from the list
+    const totalVotingPower = data.result.validators.reduce((sum, v) => sum + BigInt(v.voting_power), BigInt(0));
+
+    return {
+        validators: data.result.validators,
+        total_staked: weiToTics(totalVotingPower.toString())
+    };
   } catch (error) {
     console.error('Failed to fetch validators data:', error);
     throw error;
@@ -680,13 +687,13 @@ bot.command(['validators', `validators@${BOT_TOKEN.split(':')[0]}`], async (ctx)
   try {
     const validatorData = await fetchValidatorsData();
     const validators = validatorData.validators;
-    const totalStaked = parseFloat(validatorData.total_staked);
+    const totalStaked = validatorData.total_staked;
 
     if (!validators || validators.length === 0 || !totalStaked) {
       throw new Error('Invalid validator data received');
     }
 
-    validators.sort((a, b) => parseFloat(b.voting_power) - parseFloat(a.voting_power));
+    validators.sort((a, b) => BigInt(b.voting_power) - BigInt(a.voting_power));
 
     let message = `*TICS Network Validators* ⛓️\n\n`;
     message += `Total Staked: \`${formatNumber(totalStaked)} TICS\`\n\n`;
@@ -694,13 +701,15 @@ bot.command(['validators', `validators@${BOT_TOKEN.split(':')[0]}`], async (ctx)
     const topValidators = validators.slice(0, 10);
 
     topValidators.forEach((validator, index) => {
-      const votingPower = parseFloat(validator.voting_power);
+      const votingPower = weiToTics(validator.voting_power);
       const votingPowerPercent = ((votingPower / totalStaked) * 100).toFixed(2);
-      const delegators = validator.delegators_count;
+      
+      // Assuming moniker is available directly, if not, you might need to fetch it
+      const moniker = validator.proposer_address; // Placeholder if moniker is not in this object
+      const shortAddress = `${validator.address.slice(0, 8)}...${validator.address.slice(-6)}`;
 
-      message += `${index + 1}. *${validator.moniker}*\n`;
-      message += `   - Voting Power: \`${formatNumber(votingPower)} (${votingPowerPercent}%)\`\n`;
-      message += `   - Delegators: \`${delegators}\`\n\n`;
+      message += `${index + 1}. *${shortAddress}*\n`;
+      message += `   - Voting Power: \`${formatNumber(votingPower)} (${votingPowerPercent}%)\`\n\n`;
     });
 
     if (validators.length > 10) {
