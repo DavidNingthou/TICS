@@ -26,7 +26,6 @@ let exchangeData = {
   coinstore: { price: null, volume: null, high: null, low: null, timestamp: 0, connected: false }
 };
 
-let lbankWs = null;
 let coinstoreWs = null;
 let mexcPollingInterval = null;
 let whaleWs = null;
@@ -933,14 +932,13 @@ console.log('🏦 CEX alerts: 20+ TICS threshold');
 console.log('🐋 Whale alerts: 100+ TICS threshold');
 
 setInterval(() => {
-  console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: ${exchangeData.lbank.connected ? '✅' : '❌'} | CoinStore: ${exchangeData.coinstore.connected ? '✅' : '❌'} | Alerts: ${whaleWs && whaleWs.readyState === 1 ? '✅' : '❌'}`);
+  console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: Puppeteer | CoinStore: ${exchangeData.coinstore.connected ? '✅' : '❌'} | Alerts: ${whaleWs && whaleWs.readyState === 1 ? '✅' : '❌'}`);
 }, 300000);
 
 const shutdown = (signal) => {
   console.log(`🛑 ${signal} received, stopping bot...`);
   
   if (mexcPollingInterval) clearInterval(mexcPollingInterval);
-  if (lbankWs) lbankWs.close();
   if (coinstoreWs) coinstoreWs.close();
   if (whaleWs) whaleWs.close();
   
