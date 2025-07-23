@@ -40,21 +40,15 @@ function startLbankScraper() {
             browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
             const page = await browser.newPage();
             
-            // Pipe browser console to Node console for debugging
-            page.on('console', msg => console.log(`[LBank Browser]: ${msg.text()}`));
-
             await page.goto('https://www.lbank.com/trade/tics_usdt', { waitUntil: 'networkidle2', timeout: 60000 });
             
             const extractLbankData = async () => {
                 try {
                     const data = await page.evaluate(() => {
-                        console.log('--- Evaluating page for LBank data ---');
                         const scrapedData = {};
                         const titlesToScrape = { 'Fiat Equivalent': 'price', '24h High': 'high', '24h Low': 'low', '24h Volume(TICS)': 'volume' };
-                        const titles = document.querySelectorAll('.indicator_title');
-                        console.log(`Found ${titles.length} elements with class .indicator_title`);
-
-                        titles.forEach(el => {
+                        
+                        document.querySelectorAll('.indicator_title').forEach(el => {
                             let title = el.innerText.trim();
                             if (title.includes('24h Volume') && title.includes('TICS')) {
                                 title = '24h Volume(TICS)';
@@ -65,14 +59,12 @@ function startLbankScraper() {
                                 if (valEl) {
                                     const key = titlesToScrape[title];
                                     let raw = valEl.innerText.trim();
-                                    console.log(`Found title: '${title}', raw value: '${raw.replace(/\n/g, ' ')}'`);
-                                    scrapedData[key] = parseFloat(raw.includes('\n') ? raw.split('\n').pop().replace(/["$,]/g, '') : raw.replace(/,/g, ''));
-                                } else {
-                                    console.log(`Could not find .indicator_value for title: '${title}'`);
+                                    // CORRECTED PARSING LOGIC: Remove all non-numeric characters except the decimal point.
+                                    const cleanedValue = raw.replace(/[^0-9.]/g, '');
+                                    scrapedData[key] = parseFloat(cleanedValue);
                                 }
                             }
                         });
-                        console.log(`--- Finished evaluation. Scraped data: ${JSON.stringify(scrapedData)} ---`);
                         return scrapedData;
                     });
 
