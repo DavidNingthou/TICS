@@ -314,105 +314,8 @@ function startMexcPolling() {
 }
 
 function connectLBankWebSocket() {
-  try {
-    lbankWs = new WebSocket('wss://www.lbkex.net/ws/V2/');
-    let pingInterval = null;
-    let dataTimeout = null;
-    
-    lbankWs.on('open', () => {
-      console.log('✅ LBank WebSocket connected');
-      exchangeData.lbank.connected = true;
-      
-      const subscribeMsg = {
-        action: "subscribe",
-        subscribe: "tick",
-        pair: "tics_usdt"
-      };
-      lbankWs.send(JSON.stringify(subscribeMsg));
-      console.log('📡 LBank: Subscribed to tics_usdt ticker');
-      
-      pingInterval = setInterval(() => {
-        if (lbankWs && lbankWs.readyState === WebSocket.OPEN) {
-          lbankWs.send(JSON.stringify({ action: "ping" }));
-        } else {
-          clearInterval(pingInterval);
-        }
-      }, 30000);
-      
-      dataTimeout = setTimeout(() => {
-        if (exchangeData.lbank.connected && (!exchangeData.lbank.price || exchangeData.lbank.price === 0)) {
-          console.log('⚠️ LBank WS: No data received after 10s, marking as disconnected');
-          exchangeData.lbank.connected = false;
-        }
-      }, 10000);
-    });
-    
-    lbankWs.on('message', (data) => {
-      try {
-        const message = JSON.parse(data.toString());
-        console.log('📨 LBank WS message:', JSON.stringify(message));
-        
-        if (message.pong) {
-          console.log('🏓 LBank pong received');
-          return;
-        }
-        
-        if (message.type === 'tick' && message.pair === 'tics_usdt' && message.tick) {
-          const tickerData = message.tick;
-          console.log('📊 LBank ticker data:', JSON.stringify(tickerData));
-          
-          const price = parseFloat(tickerData.latest);
-          const volume = parseFloat(tickerData.vol);
-          const high = parseFloat(tickerData.high);
-          const low = parseFloat(tickerData.low);
-          
-          if (!isNaN(price) && price > 0 && !isNaN(volume) && volume >= 0) {
-            exchangeData.lbank = {
-              price: price,
-              volume: volume,
-              high: !isNaN(high) ? high : price,
-              low: !isNaN(low) ? low : price,
-              timestamp: Date.now(),
-              connected: true
-            };
-            console.log(`📈 LBank WS: ${price.toFixed(4)}, Vol: ${volume.toFixed(0)}`);
-            if (dataTimeout) {
-              clearTimeout(dataTimeout);
-              dataTimeout = null;
-            }
-          } else {
-            console.log('⚠️ LBank WS: Invalid ticker data - price:', price, 'volume:', volume);
-            exchangeData.lbank.connected = false;
-          }
-        } else if (message.type) {
-          console.log(`📩 LBank WS: Other message type: ${message.type}`);
-        }
-      } catch (error) {
-        console.error('LBank WebSocket message parsing error:', error);
-        exchangeData.lbank.connected = false;
-      }
-    });
-    
-    lbankWs.on('close', (code, reason) => {
-      console.log(`🔄 LBank WebSocket disconnected (${code}: ${reason}), reconnecting...`);
-      exchangeData.lbank.connected = false;
-      if (pingInterval) clearInterval(pingInterval);
-      if (dataTimeout) clearTimeout(dataTimeout);
-      setTimeout(connectLBankWebSocket, 5000);
-    });
-    
-    lbankWs.on('error', (error) => {
-      console.error('LBank WebSocket error:', error);
-      exchangeData.lbank.connected = false;
-      if (pingInterval) clearInterval(pingInterval);
-      if (dataTimeout) clearTimeout(dataTimeout);
-    });
-    
-  } catch (error) {
-    console.error('Failed to start LBank WebSocket:', error);
-    exchangeData.lbank.connected = false;
-    setTimeout(connectLBankWebSocket, 5000);
-  }
+  console.log('🔄 LBank: Using Puppeteer scraping only');
+  exchangeData.lbank.connected = false;
 }
 
 async function fetchLBankPuppeteer() {
@@ -430,74 +333,71 @@ async function fetchLBankPuppeteer() {
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
         );
 
-        // Go to TICS/USDT trading page
         await page.goto('https://www.lbank.com/trade/tics_usdt', {
             waitUntil: 'networkidle0',
             timeout: 30000
         });
 
-        // Wait for price element to load and extract data
-        const priceData = await page.evaluate(() => {
-            // Look for price elements with various possible selectors
-            const priceSelectors = [
-                '.sc-uhnfH.dgUEQp',
-                '[class*="dgUEQp"]',
-                '.last-price',
-                '[class*="last-price"]',
-                '.current-price',
-                '[class*="current-price"]'
-            ];
-            
+        await page.waitForTimeout(3000);
+
+        const marketData = await page.evaluate(() => {
             let price = null;
-            let volume = null;
             let high = null;
             let low = null;
+            let volumeTics = null;
+            let volumeUsdt = null;
+
+            const priceElements = document.querySelectorAll('.sc-uhnfH.dgUEQp');
+            for (const element of priceElements) {
+                const text = element.textContent.trim();
+                const parsed = parseFloat(text);
+                if (!isNaN(parsed) && parsed > 0 && parsed < 100) {
+                    price = parsed;
+                    break;
+                }
+            }
+
+            const indicatorItems = document.querySelectorAll('.sc-cVtpRj.hulTDS.sc-hRflou.hoTIIn.item');
             
-            // Try to find price
-            for (const selector of priceSelectors) {
-                const element = document.querySelector(selector);
-                if (element && element.textContent) {
-                    const text = element.textContent.trim();
-                    const parsed = parseFloat(text);
-                    if (!isNaN(parsed) && parsed > 0) {
-                        price = parsed;
-                        break;
+            for (const item of indicatorItems) {
+                const titleElement = item.querySelector('.indicator_title');
+                const valueElement = item.querySelector('.indicator_value .sc-uhnfH.dgUEQp');
+                
+                if (titleElement && valueElement) {
+                    const title = titleElement.textContent.trim();
+                    const value = valueElement.textContent.trim();
+                    const parsed = parseFloat(value.replace(/,/g, ''));
+                    
+                    if (title === '24h High' && !isNaN(parsed)) {
+                        high = parsed;
+                    } else if (title === '24h Low' && !isNaN(parsed)) {
+                        low = parsed;
+                    } else if (title.includes('24h Volume') && title.includes('(TICS)') && !isNaN(parsed)) {
+                        volumeTics = parsed;
+                    } else if (title.includes('24h Volume') && title.includes('(USDT)') && !isNaN(parsed)) {
+                        volumeUsdt = parsed;
                     }
                 }
             }
-            
-            // Look for 24h stats (volume, high, low)
-            const statsElements = document.querySelectorAll('[class*="stats"], [class*="ticker"], [class*="market-data"]');
-            for (const element of statsElements) {
-                const text = element.textContent;
-                if (text.includes('24h') || text.includes('Volume') || text.includes('High') || text.includes('Low')) {
-                    // Try to extract numbers from stats
-                    const numbers = text.match(/[\d,]+\.?\d*/g);
-                    if (numbers && numbers.length > 0) {
-                        numbers.forEach(num => {
-                            const parsed = parseFloat(num.replace(/,/g, ''));
-                            if (!isNaN(parsed) && parsed > 0) {
-                                if (!volume && parsed > 1000) volume = parsed; // Likely volume
-                                if (!high && parsed > 0 && parsed < 100) high = parsed; // Likely price
-                                if (!low && parsed > 0 && parsed < 100) low = parsed; // Likely price
-                            }
-                        });
-                    }
-                }
-            }
-            
-            return { price, volume, high, low };
+
+            return {
+                price,
+                high,
+                low,
+                volumeTics,
+                volumeUsdt
+            };
         });
 
-        console.log('📊 LBank Puppeteer extracted:', priceData);
+        console.log('📊 LBank Puppeteer extracted:', marketData);
 
-        if (priceData.price && priceData.price > 0) {
-            console.log(`✅ LBank Puppeteer: Successfully scraped price ${priceData.price.toFixed(4)}`);
+        if (marketData.price && marketData.price > 0) {
+            console.log(`✅ LBank Puppeteer: Price $${marketData.price.toFixed(4)}, High: $${marketData.high?.toFixed(4) || 'N/A'}, Low: $${marketData.low?.toFixed(4) || 'N/A'}, Vol: ${marketData.volumeTics?.toFixed(0) || 'N/A'} TICS`);
             return {
-                price: priceData.price,
-                volume: priceData.volume || 0,
-                high: priceData.high || priceData.price,
-                low: priceData.low || priceData.price,
+                price: marketData.price,
+                volume: marketData.volumeTics || 0,
+                high: marketData.high || marketData.price,
+                low: marketData.low || marketData.price,
                 timestamp: Date.now()
             };
         } else {
@@ -614,25 +514,25 @@ async function getExchangeData(exchange) {
     const now = Date.now();
 
     if (data.connected && data.price && data.price > 0 && (now - data.timestamp) < 30000) {
-        console.log(`📊 ${exchange}: Using WebSocket data - ${data.price.toFixed(4)}`);
+        console.log(`📊 ${exchange}: Using WebSocket data - $${data.price.toFixed(4)}`);
         return data;
     }
 
-    console.log(`🔄 ${exchange}: WebSocket data stale/invalid, trying REST API...`);
+    console.log(`🔄 ${exchange}: WebSocket data stale/invalid, trying fallback...`);
     
     if (exchange === 'lbank') {
-        const restData = await fetchLBankREST();
-        if (restData && restData.price > 0) {
-            console.log(`📈 LBank REST: ${restData.price.toFixed(4)}, Vol: ${restData.volume.toFixed(0)}`);
-            exchangeData.lbank = { ...restData, connected: false };
+        const scrapedData = await fetchLBankPuppeteer();
+        if (scrapedData && scrapedData.price > 0) {
+            console.log(`📈 LBank Scraped: $${scrapedData.price.toFixed(4)}, Vol: ${scrapedData.volume.toFixed(0)}`);
+            exchangeData.lbank = { ...scrapedData, connected: false };
             return exchangeData.lbank;
         } else {
-            console.log('❌ LBank REST: Failed to get valid data');
+            console.log('❌ LBank Scraping: Failed to get valid data');
         }
     } else if (exchange === 'coinstore') {
         const restData = await fetchCoinstoreREST();
         if (restData && restData.price > 0) {
-            console.log(`📈 CoinStore REST: ${restData.price.toFixed(4)}, Vol: ${restData.volume.toFixed(0)}`);
+            console.log(`📈 CoinStore REST: $${restData.price.toFixed(4)}, Vol: ${restData.volume.toFixed(0)}`);
             exchangeData.coinstore = { ...restData, connected: false };
             return exchangeData.coinstore;
         } else {
@@ -877,9 +777,9 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
 
 👤 **Wallet:** \`${shortWalletAddress}\`
 🪙 **Total TICS:** \`${formatNumber(totalTokens)} TICS\`
-💰 **Portfolio Value:** \`$${portfolioValue.toFixed(2)} USDT\`
+💰 **Portfolio Value:** \`${portfolioValue.toFixed(2)} USDT\`
 
-📊 **Current Price:** \`$${currentPrice.toFixed(4)}\`
+📊 **Current Price:** \`${currentPrice.toFixed(4)}\`
 ${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
 
 🎯 **Receiving Address:** \`${shortReceivingAddress}\`
