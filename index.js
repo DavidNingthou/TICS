@@ -479,10 +479,11 @@ async function getExchangeData(exchange) {
 
     // For LBank, we now rely on the scraper's "connected" status
     if (exchange === 'lbank') {
-        if (data.connected && data.price && (now - data.timestamp < 30000)) {
+        // --- FIX: Directly return the data if the scraper says it's connected ---
+        if (data.connected && data.price) {
             return data;
         }
-        return null; // Scraper will handle reconnections
+        return null; 
     }
 
     // Existing logic for CoinStore
