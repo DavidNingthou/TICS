@@ -26,7 +26,6 @@ let exchangeData = {
   coinstore: { price: null, volume: null, high: null, low: null, timestamp: 0, connected: false }
 };
 
-let coinstoreWs = null;
 let mexcPollingInterval = null;
 let whaleWs = null;
 let lastProcessedBlock = null;
@@ -72,18 +71,65 @@ async function startLbankScraper() {
                     exchangeData.lbank.connected = false;
                 }
             } catch (error) {
-                console.error('[Scraper Error] in extractLbankData:', error.message);
+                console.error('[Scraper Error] in LBank extractLbankData:', error.message);
                 exchangeData.lbank.connected = false;
             }
         };
         
         console.log('✅ LBank Scraper is running.');
-        setInterval(extractLbankData, 5000); // Start continuous polling
+        setInterval(extractLbankData, 5000);
 
     } catch (error) {
         console.error('❌ Failed to start LBank scraper, will retry in 30s:', error.message);
         if (browser) await browser.close();
-        setTimeout(startLbankScraper, 30000); // Retry on failure
+        setTimeout(startLbankScraper, 30000);
+    }
+}
+
+// --- NEW ROBUST COINSTORE SCRAPER ---
+async function startCoinstoreScraper() {
+    console.log('✅ Initializing CoinStore Puppeteer Scraper...');
+    let browser;
+    try {
+        browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+        const page = await browser.newPage();
+        
+        // The API endpoint is the most reliable source
+        await page.goto('https://api.coinstore.com/api/v1/market/tickers', { waitUntil: 'networkidle0', timeout: 60000 });
+
+        const extractCoinstoreData = async () => {
+            try {
+                // Reload the page to get fresh data
+                await page.reload({ waitUntil: 'networkidle0' });
+                const body = await page.evaluate(() => document.body.innerText);
+                const json = JSON.parse(body);
+                const tics = json.data.find(item => item.symbol === 'TICSUSDT');
+
+                if (tics) {
+                    exchangeData.coinstore = {
+                        price: parseFloat(tics.close),
+                        volume: parseFloat(tics.volume),
+                        high: parseFloat(tics.high),
+                        low: parseFloat(tics.low),
+                        timestamp: Date.now(),
+                        connected: true
+                    };
+                } else {
+                    exchangeData.coinstore.connected = false;
+                }
+            } catch (error) {
+                console.error('[Scraper Error] in CoinStore extractCoinstoreData:', error.message);
+                exchangeData.coinstore.connected = false;
+            }
+        };
+        
+        console.log('✅ CoinStore Scraper is running.');
+        setInterval(extractCoinstoreData, 5000);
+
+    } catch (error) {
+        console.error('❌ Failed to start CoinStore scraper, will retry in 30s:', error.message);
+        if (browser) await browser.close();
+        setTimeout(startCoinstoreScraper, 30000);
     }
 }
 
@@ -355,30 +401,6 @@ function startMexcPolling() {
     };
     fetchData();
     mexcPollingInterval = setInterval(fetchData, 5000);
-}
-
-function connectCoinstoreWebSocket() {
-    try {
-        coinstoreWs = new WebSocket('wss://ws.coinstore.com/s/v1/ticker');
-        coinstoreWs.on('open', () => {
-            console.log('✅ CoinStore WebSocket connected');
-            coinstoreWs.send(JSON.stringify({ "event": "subscribe", "channel": ["ticker_TICSUSDT"] }));
-        });
-        coinstoreWs.on('message', (data) => {
-            const message = JSON.parse(data.toString());
-            if (message.channel === 'ticker_TICSUSDT' && message.data) {
-                const d = message.data;
-                exchangeData.coinstore = { price: parseFloat(d.c), volume: parseFloat(d.v), high: parseFloat(d.h), low: parseFloat(d.l), timestamp: Date.now(), connected: true };
-            }
-        });
-        coinstoreWs.on('close', () => {
-            exchangeData.coinstore.connected = false;
-            setTimeout(connectCoinstoreWebSocket, 5000);
-        });
-        coinstoreWs.on('error', () => { exchangeData.coinstore.connected = false; });
-    } catch (error) {
-        setTimeout(connectCoinstoreWebSocket, 5000);
-    }
 }
 
 async function getCombinedData() {
@@ -653,13 +675,13 @@ function main() {
     // Start all services in the background
     startMexcPolling();
     startLbankScraper();
-    connectCoinstoreWebSocket();
+    startCoinstoreScraper(); // Replaced the old websocket function
     startWhaleMonitoring();
     
     // Launch the bot immediately
     bot.launch();
     console.log('✅ TICS Multi-Exchange Bot is now live and accepting commands.');
-    console.log('📡 MEXC: Polling | LBank: Puppeteer | CoinStore: WebSocket');
+    console.log('📡 MEXC: Polling | LBank: Puppeteer | CoinStore: Puppeteer');
 }
 
 main();
@@ -673,7 +695,6 @@ const shutdown = (signal) => {
   console.log(`🛑 ${signal} received, stopping bot...`);
   
   if (mexcPollingInterval) clearInterval(mexcPollingInterval);
-  if (coinstoreWs) coinstoreWs.close();
   if (whaleWs) whaleWs.close();
   
   bot.stop(signal);
