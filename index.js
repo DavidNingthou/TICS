@@ -94,6 +94,8 @@ async function startLbankScraper() {
                         timestamp: Date.now(),
                         connected: true
                     };
+                    // --- LOG 1: Confirm scraper is updating the global variable ---
+                    console.log(`[LOG] LBank Scraper updated data: ${JSON.stringify(exchangeData.lbank)}`);
                 } else {
                     exchangeData.lbank.connected = false;
                 }
@@ -477,7 +479,6 @@ async function getExchangeData(exchange) {
     const data = exchangeData[exchange];
     const now = Date.now();
 
-    // This function now only handles the fallback for CoinStore
     if (exchange === 'coinstore') {
        if (data.connected && data.price && (now - data.timestamp) < 30000) {
            return data;
@@ -493,12 +494,24 @@ async function getExchangeData(exchange) {
 }
 
 async function getCombinedData() {
-    // --- FIX: Read directly from the global exchangeData object for all sources ---
+    // --- LOG 2: Check the state of LBank data when the command is run ---
+    console.log(`[LOG] getCombinedData called. Current LBank data: ${JSON.stringify(exchangeData.lbank)}`);
+
     const mexcData = (exchangeData.mexc.connected && exchangeData.mexc.price > 0) ? exchangeData.mexc : null;
     const lbankData = (exchangeData.lbank.connected && exchangeData.lbank.price > 0) ? exchangeData.lbank : null;
-    const coinstoreData = await getExchangeData('coinstore'); // Keep fallback for coinstore
+    const coinstoreData = await getExchangeData('coinstore');
 
     const availableExchanges = [mexcData, lbankData, coinstoreData].filter(d => d && d.price && d.volume >= 0);
+
+    // --- LOG 3: See which exchanges are being used in the calculation ---
+    const sourceNames = availableExchanges.map(d => {
+        if (d === mexcData) return 'MEXC';
+        if (d === lbankData) return 'LBank';
+        if (d === coinstoreData) return 'CoinStore';
+        return 'Unknown';
+    });
+    console.log(`[LOG] Exchanges being combined: ${sourceNames.join(', ')}`);
+
 
     if (availableExchanges.length === 0) {
         throw new Error('No valid data available from any exchange');
