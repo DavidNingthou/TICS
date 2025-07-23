@@ -338,7 +338,16 @@ async function fetchLBankPuppeteer() {
             timeout: 30000
         });
 
-        await page.waitForTimeout(3000);
+        // Wait for dynamic content to load using setTimeout instead of page.waitForTimeout
+        await new Promise(resolve => setTimeout(resolve, 5000));
+
+        // Try to wait for price elements to be visible
+        try {
+            await page.waitForSelector('.sc-uhnfH.dgUEQp', { timeout: 10000 });
+            console.log('✅ LBank: Price elements found');
+        } catch (e) {
+            console.log('⚠️ LBank: Price selector not found, continuing anyway...');
+        }
 
         const marketData = await page.evaluate(() => {
             let price = null;
@@ -347,17 +356,39 @@ async function fetchLBankPuppeteer() {
             let volumeTics = null;
             let volumeUsdt = null;
 
+            // Try multiple strategies to find the price
             const priceElements = document.querySelectorAll('.sc-uhnfH.dgUEQp');
+            console.log('Found price elements:', priceElements.length);
+            
             for (const element of priceElements) {
                 const text = element.textContent.trim();
                 const parsed = parseFloat(text);
+                console.log('Checking price element:', text, 'parsed:', parsed);
                 if (!isNaN(parsed) && parsed > 0 && parsed < 100) {
                     price = parsed;
+                    console.log('Found valid price:', price);
                     break;
                 }
             }
 
+            // If no price found with specific selector, try broader search
+            if (!price) {
+                const allNumbers = document.body.innerText.match(/\d+\.\d{4,6}/g);
+                if (allNumbers) {
+                    for (const numStr of allNumbers) {
+                        const num = parseFloat(numStr);
+                        if (num > 0 && num < 100) {
+                            price = num;
+                            console.log('Found price via text search:', price);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Look for indicator items
             const indicatorItems = document.querySelectorAll('.sc-cVtpRj.hulTDS.sc-hRflou.hoTIIn.item');
+            console.log('Found indicator items:', indicatorItems.length);
             
             for (const item of indicatorItems) {
                 const titleElement = item.querySelector('.indicator_title');
@@ -367,6 +398,8 @@ async function fetchLBankPuppeteer() {
                     const title = titleElement.textContent.trim();
                     const value = valueElement.textContent.trim();
                     const parsed = parseFloat(value.replace(/,/g, ''));
+                    
+                    console.log('Indicator:', title, 'Value:', value, 'Parsed:', parsed);
                     
                     if (title === '24h High' && !isNaN(parsed)) {
                         high = parsed;
@@ -392,7 +425,7 @@ async function fetchLBankPuppeteer() {
         console.log('📊 LBank Puppeteer extracted:', marketData);
 
         if (marketData.price && marketData.price > 0) {
-            console.log(`✅ LBank Puppeteer: Price $${marketData.price.toFixed(4)}, High: $${marketData.high?.toFixed(4) || 'N/A'}, Low: $${marketData.low?.toFixed(4) || 'N/A'}, Vol: ${marketData.volumeTics?.toFixed(0) || 'N/A'} TICS`);
+            console.log(`✅ LBank Puppeteer: Price ${marketData.price.toFixed(4)}, High: ${marketData.high?.toFixed(4) || 'N/A'}, Low: ${marketData.low?.toFixed(4) || 'N/A'}, Vol: ${marketData.volumeTics?.toFixed(0) || 'N/A'} TICS`);
             return {
                 price: marketData.price,
                 volume: marketData.volumeTics || 0,
@@ -402,6 +435,13 @@ async function fetchLBankPuppeteer() {
             };
         } else {
             console.log('❌ LBank Puppeteer: Could not find valid price data');
+            
+            // Debug: Get page content for analysis
+            const pageContent = await page.content();
+            const hasIndicators = pageContent.includes('indicator_title');
+            const hasPriceClass = pageContent.includes('sc-uhnfH dgUEQp');
+            console.log('🔍 LBank Debug: Has indicators:', hasIndicators, 'Has price class:', hasPriceClass);
+            
             return null;
         }
     } catch (error) {
