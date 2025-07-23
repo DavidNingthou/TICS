@@ -315,6 +315,50 @@ function startMexcPolling() {
   mexcPollingInterval = setInterval(fetchMexcData, 2000);
 }
 
+async function initLBankBrowser() {
+  try {
+    console.log('🚀 LBank: Launching persistent browser...');
+    lbankBrowser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    });
+
+    lbankPage = await lbankBrowser.newPage();
+    await lbankPage.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
+    
+    console.log('🌐 LBank: Navigating to trading page...');
+    await lbankPage.goto('https://www.lbank.com/trade/tics_usdt', { 
+      waitUntil: 'networkidle2', 
+      timeout: 60000 
+    });
+    
+    console.log('⏳ LBank: Waiting for data containers to load...');
+    await lbankPage.waitForSelector('.indicator_title', { timeout: 30000 });
+    
+    console.log('✅ LBank: Persistent browser ready for real-time scraping');
+    exchangeData.lbank.connected = true;
+  } catch (error) {
+    console.error('❌ LBank: Failed to initialize browser:', error.message);
+    exchangeData.lbank.connected = false;
+  }
+}
+
+async function closeLBankBrowser() {
+  try {
+    if (lbankPage) {
+      await lbankPage.close();
+      lbankPage = null;
+    }
+    if (lbankBrowser) {
+      await lbankBrowser.close();
+      lbankBrowser = null;
+    }
+    console.log('🔒 LBank: Browser closed');
+  } catch (error) {
+    console.error('❌ LBank: Error closing browser:', error.message);
+  }
+}
+
 function connectLBankWebSocket() {
   console.log('🔄 LBank: Initializing persistent browser for real-time scraping');
   initLBankBrowser();
