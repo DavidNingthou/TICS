@@ -416,45 +416,103 @@ function connectLBankWebSocket() {
   }
 }
 
-async function fetchLBankREST() {
-  try {
-    console.log('🔄 LBank: Trying REST API...');
-    const response = await fetch('https://api.lbank.info/v2/ticker.do?symbol=tics_usdt', {
-      timeout: 10000,
-      headers: { 'User-Agent': 'TICS-Bot/3.0' }
-    });
-    
-    if (!response.ok) {
-      console.log(`❌ LBank REST: HTTP ${response.status}`);
-      return null;
+async function fetchLBankPuppeteer() {
+    console.log('🔄 LBank: Attempting to scrape with Puppeteer...');
+    let browser = null;
+    try {
+        browser = await puppeteer.launch({
+            headless: 'new',
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        });
+
+        const page = await browser.newPage();
+
+        await page.setUserAgent(
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+        );
+
+        // Go to TICS/USDT trading page
+        await page.goto('https://www.lbank.com/trade/tics_usdt', {
+            waitUntil: 'networkidle0',
+            timeout: 30000
+        });
+
+        // Wait for price element to load and extract data
+        const priceData = await page.evaluate(() => {
+            // Look for price elements with various possible selectors
+            const priceSelectors = [
+                '.sc-uhnfH.dgUEQp',
+                '[class*="dgUEQp"]',
+                '.last-price',
+                '[class*="last-price"]',
+                '.current-price',
+                '[class*="current-price"]'
+            ];
+            
+            let price = null;
+            let volume = null;
+            let high = null;
+            let low = null;
+            
+            // Try to find price
+            for (const selector of priceSelectors) {
+                const element = document.querySelector(selector);
+                if (element && element.textContent) {
+                    const text = element.textContent.trim();
+                    const parsed = parseFloat(text);
+                    if (!isNaN(parsed) && parsed > 0) {
+                        price = parsed;
+                        break;
+                    }
+                }
+            }
+            
+            // Look for 24h stats (volume, high, low)
+            const statsElements = document.querySelectorAll('[class*="stats"], [class*="ticker"], [class*="market-data"]');
+            for (const element of statsElements) {
+                const text = element.textContent;
+                if (text.includes('24h') || text.includes('Volume') || text.includes('High') || text.includes('Low')) {
+                    // Try to extract numbers from stats
+                    const numbers = text.match(/[\d,]+\.?\d*/g);
+                    if (numbers && numbers.length > 0) {
+                        numbers.forEach(num => {
+                            const parsed = parseFloat(num.replace(/,/g, ''));
+                            if (!isNaN(parsed) && parsed > 0) {
+                                if (!volume && parsed > 1000) volume = parsed; // Likely volume
+                                if (!high && parsed > 0 && parsed < 100) high = parsed; // Likely price
+                                if (!low && parsed > 0 && parsed < 100) low = parsed; // Likely price
+                            }
+                        });
+                    }
+                }
+            }
+            
+            return { price, volume, high, low };
+        });
+
+        console.log('📊 LBank Puppeteer extracted:', priceData);
+
+        if (priceData.price && priceData.price > 0) {
+            console.log(`✅ LBank Puppeteer: Successfully scraped price ${priceData.price.toFixed(4)}`);
+            return {
+                price: priceData.price,
+                volume: priceData.volume || 0,
+                high: priceData.high || priceData.price,
+                low: priceData.low || priceData.price,
+                timestamp: Date.now()
+            };
+        } else {
+            console.log('❌ LBank Puppeteer: Could not find valid price data');
+            return null;
+        }
+    } catch (error) {
+        console.error('❌ LBank Puppeteer error:', error.message);
+        return null;
+    } finally {
+        if (browser) {
+            await browser.close();
+        }
     }
-    
-    const data = await response.json();
-    console.log('📨 LBank REST response:', JSON.stringify(data));
-    
-    if (data.result === 'true' && data.data && data.data[0] && data.data[0].ticker) {
-      const ticker = data.data[0].ticker;
-      const price = parseFloat(ticker.latest);
-      const volume = parseFloat(ticker.vol);
-      
-      if (!isNaN(price) && price > 0) {
-        return {
-          price: price,
-          volume: !isNaN(volume) ? volume : 0,
-          high: parseFloat(ticker.high) || price,
-          low: parseFloat(ticker.low) || price,
-          timestamp: Date.now()
-        };
-      } else {
-        console.log('❌ LBank REST: Invalid price data:', price);
-      }
-    } else {
-      console.log('❌ LBank REST: Invalid response structure');
-    }
-  } catch (error) {
-    console.error('❌ LBank REST error:', error.message);
-  }
-  return null;
 }
 
 function connectCoinstoreWebSocket() {
@@ -869,7 +927,7 @@ startWhaleMonitoring();
 
 bot.launch();
 console.log('✅ TICS Multi-Exchange Bot running');
-console.log('📡 MEXC: Live polling (2s) | LBank: WebSocket | CoinStore: WebSocket/Puppeteer');
+console.log('📡 MEXC: Live polling (2s) | LBank: Puppeteer scraping | CoinStore: WebSocket/Puppeteer');
 console.log('💼 Portfolio tracker: /check wallet_address');
 console.log('🏦 CEX alerts: 20+ TICS threshold');
 console.log('🐋 Whale alerts: 100+ TICS threshold');
