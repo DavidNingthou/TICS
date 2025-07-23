@@ -475,32 +475,34 @@ async function fetchWalletData(walletAddress) {
   }
 }
 
-// --- NEW ADDRESS DATA FUNCTION ---
+// --- CORRECTED ADDRESS DATA FUNCTION ---
 async function fetchAddressData(address) {
+    let detailsData = null;
+    let tokensData = { data: { contractDetails: [] } }; // Default to empty tokens
+
+    // Fetch address details (must succeed)
+    const detailsRes = await fetch(`https://evm-api.qubetics.com/qubetics/explorer/address-detail/${address}`);
+    if (!detailsRes.ok) throw new Error(`Address details API Error: ${detailsRes.status}`);
+    detailsData = await detailsRes.json();
+    if (detailsData.error) throw new Error('API returned an error for address details');
+
+    // Fetch token holdings (optional, can fail)
     try {
-        const [detailsRes, tokensRes] = await Promise.all([
-            fetch(`https://evm-api.qubetics.com/qubetics/explorer/address-detail/${address}`),
-            fetch(`https://evm-api.qubetics.com/qubetics/tokens/token-by-wallet-address?address=${address}&page=1&limit=10`)
-        ]);
-
-        if (!detailsRes.ok) throw new Error(`Address details API Error: ${detailsRes.status}`);
-        if (!tokensRes.ok) throw new Error(`Token holdings API Error: ${tokensRes.status}`);
-
-        const detailsData = await detailsRes.json();
-        const tokensData = await tokensRes.json();
-
-        if (detailsData.error || tokensData.error) {
-            throw new Error('API returned an error');
+        const tokensRes = await fetch(`https://evm-api.qubetics.com/qubetics/tokens/token-by-wallet-address?address=${address}&page=1&limit=10`);
+        if (tokensRes.ok) {
+            const tempTokensData = await tokensRes.json();
+            if (!tempTokensData.error) {
+                tokensData = tempTokensData;
+            }
         }
-
-        return {
-            details: detailsData.data,
-            tokens: tokensData.data.contractDetails || []
-        };
     } catch (error) {
-        console.error('Failed to fetch address data:', error);
-        throw error;
+        console.log(`Could not fetch token holdings for ${address}. This is expected for addresses with no tokens.`);
     }
+
+    return {
+        details: detailsData.data,
+        tokens: tokensData.data.contractDetails || []
+    };
 }
 
 
