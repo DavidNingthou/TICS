@@ -475,18 +475,15 @@ async function fetchWalletData(walletAddress) {
   }
 }
 
-// --- CORRECTED ADDRESS DATA FUNCTION ---
 async function fetchAddressData(address) {
     let detailsData = null;
     let tokensData = { data: { contractDetails: [] } }; // Default to empty tokens
 
-    // Fetch address details (must succeed)
     const detailsRes = await fetch(`https://evm-api.qubetics.com/qubetics/explorer/address-detail/${address}`);
     if (!detailsRes.ok) throw new Error(`Address details API Error: ${detailsRes.status}`);
     detailsData = await detailsRes.json();
     if (detailsData.error) throw new Error('API returned an error for address details');
 
-    // Fetch token holdings (optional, can fail)
     try {
         const tokensRes = await fetch(`https://evm-api.qubetics.com/qubetics/tokens/token-by-wallet-address?address=${address}&page=1&limit=10`);
         if (tokensRes.ok) {
@@ -532,6 +529,24 @@ async function fetchValidatorsData() {
   }
 }
 
+// --- NEW NODES/PEERS FUNCTION ---
+async function fetchNodesData() {
+    try {
+        const response = await fetch('https://evm-api.qubetics.com/qubetics/explorer/peers');
+        if (!response.ok) {
+            throw new Error(`Peers API Error: ${response.status}`);
+        }
+        const data = await response.json();
+        if (!data || data.error || !data.data) {
+            throw new Error('Invalid peers API response structure');
+        }
+        return data.data;
+    } catch (error) {
+        console.error('Failed to fetch nodes data:', error);
+        throw error;
+    }
+}
+
 
 function isValidWalletAddress(address) {
   return /^0x[a-fA-F0-9]{40}$/.test(address);
@@ -550,11 +565,12 @@ bot.telegram.setMyCommands([
   { command: 'price', description: 'Get TICS price from all exchanges' },
   { command: 'check', description: 'Check TICS portfolio (usage: /check wallet_address)' },
   { command: 'validators', description: 'Show top network validators' },
-  { command: 'address', description: 'Check a Qubetics mainnet address' }
+  { command: 'address', description: 'Check a Qubetics mainnet address' },
+  { command: 'nodes', description: 'Show network nodes/peers' }
 ]);
 
 bot.start(async (ctx) => {
-  await ctx.reply('🎉 *TICS Price Bot Ready!*\n\n📊 Commands:\n/price - Combined data from MEXC, LBank & CoinStore\n/check - Portfolio tracker\n/validators - Network validator list\n/address - Check mainnet address', 
+  await ctx.reply('🎉 *TICS Price Bot Ready!*\n\n📊 Commands:\n/price - Combined data\n/check - Portfolio tracker\n/validators - Validator list\n/address - Check address\n/nodes - Network nodes', 
     { parse_mode: 'Markdown', reply_to_message_id: ctx.message.message_id });
 });
 
@@ -568,6 +584,7 @@ bot.command(['help', `help@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
 ⛓️ /validators - Show top network validators
 📍 /address - Check a Qubetics mainnet address
    Usage: \`/address 0x...\`
+🌍 /nodes - Show network nodes/peers
   `.trim();
   
   await ctx.reply(helpMessage, { 
@@ -757,7 +774,6 @@ bot.command(['validators', `validators@${BOT_TOKEN.split(':')[0]}`], async (ctx)
   }
 });
 
-// --- NEW ADDRESS COMMAND ---
 bot.command(['address', `address@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
     if (!ctx.from || !ctx.from.id) {
         await safeReply(ctx, '❌ Unable to identify user. Please try again.');
@@ -811,6 +827,40 @@ bot.command(['address', `address@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
     } catch (error) {
         console.error('Address command error:', error);
         await ctx.reply('❌ *Address data unavailable*\n\nCould not fetch information for this address. It may not exist on the Qubetics mainnet.', { parse_mode: 'Markdown' });
+    }
+});
+
+// --- NEW NODES COMMAND ---
+bot.command(['nodes', `nodes@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
+    ctx.sendChatAction('typing').catch(() => {});
+
+    try {
+        const nodesData = await fetchNodesData();
+        const totalNodes = nodesData.total;
+        const countryCount = nodesData.countryCount;
+        const nodes = nodesData.globeLocDetail;
+
+        let message = `*TICS Network Nodes* 🌍\n\n`;
+        message += `Total Peers: \`${totalNodes}\`\n`;
+        message += `Countries: \`${countryCount}\`\n\n`;
+
+        const topNodes = nodes.slice(0, 10);
+
+        topNodes.forEach((node, index) => {
+            message += `${index + 1}. *${node.nodeName}*\n`;
+            message += `   - Location: \`${node.location.city}, ${node.location.country}\`\n`;
+            message += `   - Version: \`${node.version}\`\n\n`;
+        });
+        
+        if (nodes.length > 10) {
+            message += `... and ${nodes.length - 10} more nodes.`;
+        }
+
+        await ctx.reply(message, { parse_mode: 'Markdown' });
+
+    } catch (error) {
+        console.error('Nodes command error:', error);
+        await ctx.reply('❌ *Node data unavailable*\n\nCould not fetch network peer information at this time.', { parse_mode: 'Markdown' });
     }
 });
 
