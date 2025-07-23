@@ -94,12 +94,10 @@ async function startCoinstoreScraper() {
         browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
         const page = await browser.newPage();
         
-        // The API endpoint is the most reliable source
         await page.goto('https://api.coinstore.com/api/v1/market/tickers', { waitUntil: 'networkidle0', timeout: 60000 });
 
         const extractCoinstoreData = async () => {
             try {
-                // Reload the page to get fresh data
                 await page.reload({ waitUntil: 'networkidle0' });
                 const body = await page.evaluate(() => document.body.innerText);
                 const json = JSON.parse(body);
@@ -477,6 +475,28 @@ async function fetchWalletData(walletAddress) {
   }
 }
 
+// --- NEW VALIDATOR FUNCTION ---
+async function fetchValidatorsData() {
+  try {
+    const response = await fetch('https://api.ticsscan.com/v1/validators', {
+      timeout: 10000,
+      headers: { 'User-Agent': 'TICS-Bot/3.0' }
+    });
+    if (!response.ok) {
+      throw new Error(`Validator API Error: ${response.status}`);
+    }
+    const data = await response.json();
+    if (!data || !data.data || !data.data.validators) {
+        throw new Error('Invalid validator API response structure');
+    }
+    return data.data; 
+  } catch (error) {
+    console.error('Failed to fetch validators data:', error);
+    throw error;
+  }
+}
+
+
 function isValidWalletAddress(address) {
   return /^0x[a-fA-F0-9]{40}$/.test(address);
 }
@@ -492,11 +512,12 @@ setInterval(() => {
 
 bot.telegram.setMyCommands([
   { command: 'price', description: 'Get TICS price from all exchanges' },
-  { command: 'check', description: 'Check TICS portfolio (usage: /check wallet_address)' }
+  { command: 'check', description: 'Check TICS portfolio (usage: /check wallet_address)' },
+  { command: 'validators', description: 'Show top network validators' }
 ]);
 
 bot.start(async (ctx) => {
-  await ctx.reply('🎉 *TICS Price Bot Ready!*\n\n📊 Commands:\n/price - Combined data from MEXC, LBank & CoinStore\n/check - Portfolio tracker (usage: /check wallet_address)', 
+  await ctx.reply('🎉 *TICS Price Bot Ready!*\n\n📊 Commands:\n/price - Combined data from MEXC, LBank & CoinStore\n/check - Portfolio tracker (usage: /check wallet_address)\n/validators - Network validator list', 
     { parse_mode: 'Markdown', reply_to_message_id: ctx.message.message_id });
 });
 
@@ -507,6 +528,7 @@ bot.command(['help', `help@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
 📊 /price - Combined price from MEXC, LBank & CoinStore
 💼 /check - Portfolio tracker
    Usage: \`/check 0x...\`
+⛓️ /validators - Show top network validators
   `.trim();
   
   await ctx.reply(helpMessage, { 
@@ -651,6 +673,54 @@ ${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
   }
 });
 
+// --- NEW VALIDATORS COMMAND ---
+bot.command(['validators', `validators@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
+  ctx.sendChatAction('typing').catch(() => {});
+
+  try {
+    const validatorData = await fetchValidatorsData();
+    const validators = validatorData.validators;
+    const totalStaked = parseFloat(validatorData.total_staked);
+
+    if (!validators || validators.length === 0 || !totalStaked) {
+      throw new Error('Invalid validator data received');
+    }
+
+    validators.sort((a, b) => parseFloat(b.voting_power) - parseFloat(a.voting_power));
+
+    let message = `*TICS Network Validators* ⛓️\n\n`;
+    message += `Total Staked: \`${formatNumber(totalStaked)} TICS\`\n\n`;
+
+    const topValidators = validators.slice(0, 10);
+
+    topValidators.forEach((validator, index) => {
+      const votingPower = parseFloat(validator.voting_power);
+      const votingPowerPercent = ((votingPower / totalStaked) * 100).toFixed(2);
+      const delegators = validator.delegators_count;
+
+      message += `${index + 1}. *${validator.moniker}*\n`;
+      message += `   - Voting Power: \`${formatNumber(votingPower)} (${votingPowerPercent}%)\`\n`;
+      message += `   - Delegators: \`${delegators}\`\n\n`;
+    });
+
+    if (validators.length > 10) {
+        message += `... and ${validators.length - 10} more validators.`;
+    }
+
+    await ctx.reply(message, {
+      parse_mode: 'Markdown',
+      disable_web_page_preview: true
+    });
+
+  } catch (error) {
+    console.error('Validator command error:', error);
+    await ctx.reply('❌ *Validator data unavailable*\n\nCould not fetch validator information at this time. Please try again later.', {
+      parse_mode: 'Markdown'
+    });
+  }
+});
+
+
 bot.catch(async (err, ctx) => {
   console.error('Bot error caught:', {
     error: err.message,
@@ -672,13 +742,11 @@ bot.catch(async (err, ctx) => {
 function main() {
     console.log('🚀 Starting TICS Bot services...');
     
-    // Start all services in the background
     startMexcPolling();
     startLbankScraper();
-    startCoinstoreScraper(); // Replaced the old websocket function
+    startCoinstoreScraper();
     startWhaleMonitoring();
     
-    // Launch the bot immediately
     bot.launch();
     console.log('✅ TICS Multi-Exchange Bot is now live and accepting commands.');
     console.log('📡 MEXC: Polling | LBank: Puppeteer | CoinStore: Puppeteer');
