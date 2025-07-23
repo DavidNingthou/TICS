@@ -30,8 +30,88 @@ let coinstoreWs = null;
 let mexcPollingInterval = null;
 let whaleWs = null;
 let lastProcessedBlock = null;
-let lbankBrowser = null;
-let lbankPage = null;
+
+// --- NEW LBANK SCRAPER FUNCTION ---
+async function startLbankScraper() {
+    console.log('✅ Initializing LBank Puppeteer Scraper...');
+    let browser;
+    try {
+        browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36');
+        
+        await page.goto('https://www.lbank.com/trade/tics_usdt', { waitUntil: 'networkidle2', timeout: 60000 });
+        
+        try {
+            const cookieButtonSelector = 'div.lbank-cookie-consent-btn';
+            await page.waitForSelector(cookieButtonSelector, { timeout: 5000 });
+            await page.click(cookieButtonSelector);
+        } catch (e) {
+            // No cookie pop-up
+        }
+
+        await page.waitForSelector('.indicator_title', { timeout: 30000 });
+        console.log('✅ LBank Scraper is running and collecting data.');
+
+        const extractLbankData = async () => {
+            try {
+                const data = await page.evaluate(() => {
+                    const scrapedData = {};
+                    const titlesToScrape = {
+                        'Fiat Equivalent': 'price',
+                        '24h High': 'high',
+                        '24h Low': 'low',
+                        '24h Volume(TICS)': 'volume'
+                    };
+
+                    document.querySelectorAll('.indicator_title').forEach(titleElement => {
+                        let titleText = titleElement.innerText.trim();
+                        if (titleText.includes('24h Volume') && titleText.includes('TICS')) {
+                            titleText = '24h Volume(TICS)';
+                        }
+
+                        if (titlesToScrape[titleText]) {
+                            const parent = titleElement.parentElement;
+                            const valueElement = parent ? parent.querySelector('.indicator_value') : null;
+                            if (valueElement) {
+                                const key = titlesToScrape[titleText];
+                                let rawValue = valueElement.innerText.trim();
+                                if (rawValue.includes('\n')) {
+                                    const parts = rawValue.split('\n');
+                                    scrapedData[key] = parseFloat(parts[parts.length - 1].replace(/["$,]/g, ''));
+                                } else {
+                                    scrapedData[key] = parseFloat(rawValue.replace(/,/g, ''));
+                                }
+                            }
+                        }
+                    });
+                    return scrapedData;
+                });
+
+                if (data && data.price > 0) {
+                    exchangeData.lbank = {
+                        ...data,
+                        timestamp: Date.now(),
+                        connected: true
+                    };
+                } else {
+                    exchangeData.lbank.connected = false;
+                }
+            } catch (error) {
+                exchangeData.lbank.connected = false;
+            }
+        };
+
+        await extractLbankData();
+        setInterval(extractLbankData, 3000);
+
+    } catch (error) {
+        console.error('❌ Failed to start LBank scraper, will retry in 30s:', error.message);
+        if (browser) await browser.close();
+        setTimeout(startLbankScraper, 30000); // Retry on failure
+    }
+}
+
 
 async function safeReply(ctx, message, options = {}) {
   try {
@@ -166,7 +246,6 @@ async function processTransaction(tx) {
           amount: amount,
           type: 'native'
         });
-        console.log(`🪙 Native TICS transfer detected: ${amount.toFixed(2)} TICS`);
       }
     }
     
@@ -315,191 +394,6 @@ function startMexcPolling() {
   mexcPollingInterval = setInterval(fetchMexcData, 2000);
 }
 
-async function initLBankBrowser() {
-  try {
-    console.log('🚀 LBank: Launching persistent browser...');
-    lbankBrowser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    });
-
-    lbankPage = await lbankBrowser.newPage();
-    await lbankPage.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
-    
-    console.log('🌐 LBank: Navigating to trading page...');
-    await lbankPage.goto('https://www.lbank.com/trade/tics_usdt', { 
-      waitUntil: 'networkidle2', 
-      timeout: 60000 
-    });
-    
-    console.log('⏳ LBank: Waiting for data containers to load...');
-    await lbankPage.waitForSelector('.indicator_title', { timeout: 30000 });
-    
-    console.log('✅ LBank: Persistent browser ready for real-time scraping');
-    exchangeData.lbank.connected = true;
-  } catch (error) {
-    console.error('❌ LBank: Failed to initialize browser:', error.message);
-    exchangeData.lbank.connected = false;
-  }
-}
-
-async function closeLBankBrowser() {
-  try {
-    if (lbankPage) {
-      await lbankPage.close();
-      lbankPage = null;
-    }
-    if (lbankBrowser) {
-      await lbankBrowser.close();
-      lbankBrowser = null;
-    }
-    console.log('🔒 LBank: Browser closed');
-  } catch (error) {
-    console.error('❌ LBank: Error closing browser:', error.message);
-  }
-}
-
-function connectLBankWebSocket() {
-  console.log('🔄 LBank: Initializing persistent browser for real-time scraping');
-  initLBankBrowser();
-}
-
-async function fetchLBankPuppeteer() {
-    console.log('🔄 LBank: Attempting to scrape with Puppeteer...');
-    let browser = null;
-    try {
-        browser = await puppeteer.launch({
-            headless: 'new',
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-        });
-
-        const page = await browser.newPage();
-
-        await page.setUserAgent(
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
-        );
-
-        await page.goto('https://www.lbank.com/trade/tics_usdt', {
-            waitUntil: 'networkidle0',
-            timeout: 30000
-        });
-
-        // Wait for dynamic content to load using setTimeout instead of page.waitForTimeout
-        await new Promise(resolve => setTimeout(resolve, 5000));
-
-        // Try to wait for price elements to be visible
-        try {
-            await page.waitForSelector('.sc-uhnfH.dgUEQp', { timeout: 10000 });
-            console.log('✅ LBank: Price elements found');
-        } catch (e) {
-            console.log('⚠️ LBank: Price selector not found, continuing anyway...');
-        }
-
-        const marketData = await page.evaluate(() => {
-            let price = null;
-            let high = null;
-            let low = null;
-            let volumeTics = null;
-            let volumeUsdt = null;
-
-            // Try multiple strategies to find the price
-            const priceElements = document.querySelectorAll('.sc-uhnfH.dgUEQp');
-            console.log('Found price elements:', priceElements.length);
-            
-            for (const element of priceElements) {
-                const text = element.textContent.trim();
-                const parsed = parseFloat(text);
-                console.log('Checking price element:', text, 'parsed:', parsed);
-                if (!isNaN(parsed) && parsed > 0 && parsed < 100) {
-                    price = parsed;
-                    console.log('Found valid price:', price);
-                    break;
-                }
-            }
-
-            // If no price found with specific selector, try broader search
-            if (!price) {
-                const allNumbers = document.body.innerText.match(/\d+\.\d{4,6}/g);
-                if (allNumbers) {
-                    for (const numStr of allNumbers) {
-                        const num = parseFloat(numStr);
-                        if (num > 0 && num < 100) {
-                            price = num;
-                            console.log('Found price via text search:', price);
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // Look for indicator items
-            const indicatorItems = document.querySelectorAll('.sc-cVtpRj.hulTDS.sc-hRflou.hoTIIn.item');
-            console.log('Found indicator items:', indicatorItems.length);
-            
-            for (const item of indicatorItems) {
-                const titleElement = item.querySelector('.indicator_title');
-                const valueElement = item.querySelector('.indicator_value .sc-uhnfH.dgUEQp');
-                
-                if (titleElement && valueElement) {
-                    const title = titleElement.textContent.trim();
-                    const value = valueElement.textContent.trim();
-                    const parsed = parseFloat(value.replace(/,/g, ''));
-                    
-                    console.log('Indicator:', title, 'Value:', value, 'Parsed:', parsed);
-                    
-                    if (title === '24h High' && !isNaN(parsed)) {
-                        high = parsed;
-                    } else if (title === '24h Low' && !isNaN(parsed)) {
-                        low = parsed;
-                    } else if (title.includes('24h Volume') && title.includes('(TICS)') && !isNaN(parsed)) {
-                        volumeTics = parsed;
-                    } else if (title.includes('24h Volume') && title.includes('(USDT)') && !isNaN(parsed)) {
-                        volumeUsdt = parsed;
-                    }
-                }
-            }
-
-            return {
-                price,
-                high,
-                low,
-                volumeTics,
-                volumeUsdt
-            };
-        });
-
-        console.log('📊 LBank Puppeteer extracted:', marketData);
-
-        if (marketData.price && marketData.price > 0) {
-            console.log(`✅ LBank Puppeteer: Price ${marketData.price.toFixed(4)}, High: ${marketData.high?.toFixed(4) || 'N/A'}, Low: ${marketData.low?.toFixed(4) || 'N/A'}, Vol: ${marketData.volumeTics?.toFixed(0) || 'N/A'} TICS`);
-            return {
-                price: marketData.price,
-                volume: marketData.volumeTics || 0,
-                high: marketData.high || marketData.price,
-                low: marketData.low || marketData.price,
-                timestamp: Date.now()
-            };
-        } else {
-            console.log('❌ LBank Puppeteer: Could not find valid price data');
-            
-            // Debug: Get page content for analysis
-            const pageContent = await page.content();
-            const hasIndicators = pageContent.includes('indicator_title');
-            const hasPriceClass = pageContent.includes('sc-uhnfH dgUEQp');
-            console.log('🔍 LBank Debug: Has indicators:', hasIndicators, 'Has price class:', hasPriceClass);
-            
-            return null;
-        }
-    } catch (error) {
-        console.error('❌ LBank Puppeteer error:', error.message);
-        return null;
-    } finally {
-        if (browser) {
-            await browser.close();
-        }
-    }
-}
-
 function connectCoinstoreWebSocket() {
     try {
         coinstoreWs = new WebSocket('wss://ws.coinstore.com/s/v1/ticker');
@@ -548,7 +442,6 @@ function connectCoinstoreWebSocket() {
 }
 
 async function fetchCoinstoreREST() {
-    console.log('Attempting to fetch Coinstore data with Puppeteer...');
     let browser = null;
     try {
         browser = await puppeteer.launch({
@@ -557,23 +450,13 @@ async function fetchCoinstoreREST() {
         });
 
         const page = await browser.newPage();
-
-        await page.setUserAgent(
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
-        );
-
-        await page.goto('https://api.coinstore.com/api/v1/market/tickers', {
-            waitUntil: 'networkidle0',
-            timeout: 60000
-        });
-
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36');
+        await page.goto('https://api.coinstore.com/api/v1/market/tickers', { waitUntil: 'networkidle0', timeout: 60000 });
         const body = await page.evaluate(() => document.body.innerText);
         const json = JSON.parse(body);
-
         const tics = json.data.find(item => item.symbol === 'TICSUSDT');
 
         if (tics) {
-            console.log('Successfully fetched TICSUSDT data via Puppeteer.');
             return {
                 price: parseFloat(tics.close),
                 volume: parseFloat(tics.volume),
@@ -581,17 +464,12 @@ async function fetchCoinstoreREST() {
                 low: parseFloat(tics.low),
                 timestamp: Date.now()
             };
-        } else {
-            console.error('❌ TICSUSDT not found in Puppeteer response.');
-            return null;
         }
+        return null;
     } catch (error) {
-        console.error('Error during Puppeteer fetch for Coinstore:', error);
         return null;
     } finally {
-        if (browser) {
-            await browser.close();
-        }
+        if (browser) await browser.close();
     }
 }
 
@@ -599,31 +477,24 @@ async function getExchangeData(exchange) {
     const data = exchangeData[exchange];
     const now = Date.now();
 
-    if (data.connected && data.price && data.price > 0 && (now - data.timestamp) < 30000) {
-        console.log(`📊 ${exchange}: Using WebSocket data - $${data.price.toFixed(4)}`);
-        return data;
+    // For LBank, we now rely on the scraper's "connected" status
+    if (exchange === 'lbank') {
+        if (data.connected && data.price && (now - data.timestamp < 30000)) {
+            return data;
+        }
+        return null; // Scraper will handle reconnections
     }
 
-    console.log(`🔄 ${exchange}: WebSocket data stale/invalid, trying fallback...`);
-    
-    if (exchange === 'lbank') {
-        const scrapedData = await fetchLBankPuppeteer();
-        if (scrapedData && scrapedData.price > 0) {
-            console.log(`📈 LBank Scraped: $${scrapedData.price.toFixed(4)}, Vol: ${scrapedData.volume.toFixed(0)}`);
-            exchangeData.lbank = { ...scrapedData, connected: false };
-            return exchangeData.lbank;
-        } else {
-            console.log('❌ LBank Scraping: Failed to get valid data');
-        }
-    } else if (exchange === 'coinstore') {
-        const restData = await fetchCoinstoreREST();
-        if (restData && restData.price > 0) {
-            console.log(`📈 CoinStore REST: $${restData.price.toFixed(4)}, Vol: ${restData.volume.toFixed(0)}`);
-            exchangeData.coinstore = { ...restData, connected: false };
-            return exchangeData.coinstore;
-        } else {
-            console.log('❌ CoinStore REST: Failed to get valid data');
-        }
+    // Existing logic for CoinStore
+    if (exchange === 'coinstore') {
+       if (data.connected && data.price && (now - data.timestamp) < 30000) {
+           return data;
+       }
+       const restData = await fetchCoinstoreREST();
+       if (restData && restData.price > 0) {
+           exchangeData.coinstore = { ...restData, connected: false };
+           return exchangeData.coinstore;
+       }
     }
     
     return null;
@@ -631,14 +502,10 @@ async function getExchangeData(exchange) {
 
 async function getCombinedData() {
     const mexcData = (exchangeData.mexc.price && exchangeData.mexc.price > 0) ? exchangeData.mexc : null;
-    
     const lbankData = await getExchangeData('lbank');
-    const validLbankData = (lbankData && lbankData.price && lbankData.price > 0) ? lbankData : null;
-    
     const coinstoreData = await getExchangeData('coinstore');
-    const validCoinstoreData = (coinstoreData && coinstoreData.price && coinstoreData.price > 0) ? coinstoreData : null;
 
-    const availableExchanges = [mexcData, validLbankData, validCoinstoreData].filter(d => d && d.price && d.volume >= 0);
+    const availableExchanges = [mexcData, lbankData, coinstoreData].filter(d => d && d.price && d.volume >= 0);
 
     if (availableExchanges.length === 0) {
         throw new Error('No valid data available from any exchange');
@@ -647,8 +514,8 @@ async function getCombinedData() {
     if (availableExchanges.length === 1) {
         let sourceName = '';
         if (mexcData) sourceName = 'MEXC only';
-        else if (validLbankData) sourceName = 'LBank only';
-        else if (validCoinstoreData) sourceName = 'CoinStore only';
+        else if (lbankData) sourceName = 'LBank only';
+        else if (coinstoreData) sourceName = 'CoinStore only';
         return { ...availableExchanges[0], source: sourceName };
     }
     
@@ -678,11 +545,11 @@ async function getCombinedData() {
         high: avgHigh.toFixed(4),
         low: avgLow.toFixed(4),
         mexcPrice: mexcData?.price ? mexcData.price.toFixed(4) : 'N/A',
-        lbankPrice: validLbankData?.price ? validLbankData.price.toFixed(4) : 'N/A',
-        coinstorePrice: validCoinstoreData?.price ? validCoinstoreData.price.toFixed(4) : 'N/A',
+        lbankPrice: lbankData?.price ? lbankData.price.toFixed(4) : 'N/A',
+        coinstorePrice: coinstoreData?.price ? coinstoreData.price.toFixed(4) : 'N/A',
         mexcVolume: mexcData?.volume || 0,
-        lbankVolume: validLbankData?.volume || 0,
-        coinstoreVolume: validCoinstoreData?.volume || 0,
+        lbankVolume: lbankData?.volume || 0,
+        coinstoreVolume: coinstoreData?.volume || 0,
         timestamp: latestTimestamp,
         source: 'Combined'
     };
@@ -798,9 +665,7 @@ bot.command(['price', `price@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
 });
 
 bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
-  ctx.deleteMessage().catch(err => {
-    console.error("Could not delete message. Bot might not have permissions.", err);
-  });
+  ctx.deleteMessage().catch(err => {});
 
   if (!ctx.from || !ctx.from.id) {
     await safeReply(ctx, '❌ Unable to identify user. Please try again.');
@@ -863,9 +728,9 @@ bot.command(['check', `check@${BOT_TOKEN.split(':')[0]}`], async (ctx) => {
 
 👤 **Wallet:** \`${shortWalletAddress}\`
 🪙 **Total TICS:** \`${formatNumber(totalTokens)} TICS\`
-💰 **Portfolio Value:** \`${portfolioValue.toFixed(2)} USDT\`
+💰 **Portfolio Value:** \`$${portfolioValue.toFixed(2)} USDT\`
 
-📊 **Current Price:** \`${currentPrice.toFixed(4)}\`
+📊 **Current Price:** \`$${currentPrice.toFixed(4)}\`
 ${priceData.source ? `📈 **Source:** ${priceData.source}` : ''}
 
 🎯 **Receiving Address:** \`${shortReceivingAddress}\`
@@ -905,20 +770,21 @@ bot.catch(async (err, ctx) => {
   }
 });
 
+// --- START ALL SERVICES ---
 startMexcPolling();
-connectLBankWebSocket();
+startLbankScraper(); // New scraper replaces old methods
 connectCoinstoreWebSocket();
 startWhaleMonitoring();
 
 bot.launch();
 console.log('✅ TICS Multi-Exchange Bot running');
-console.log('📡 MEXC: Live polling (2s) | LBank: Persistent browser scraping | CoinStore: WebSocket/Puppeteer');
+console.log('📡 MEXC: Live polling (2s) | LBank: Puppeteer | CoinStore: WebSocket/Puppeteer');
 console.log('💼 Portfolio tracker: /check wallet_address');
 console.log('🏦 CEX alerts: 20+ TICS threshold');
 console.log('🐋 Whale alerts: 100+ TICS threshold');
 
 setInterval(() => {
-  console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: ${exchangeData.lbank.connected ? '✅' : '❌'} Browser | CoinStore: ${exchangeData.coinstore.connected ? '✅' : '❌'} | Alerts: ${whaleWs && whaleWs.readyState === 1 ? '✅' : '❌'}`);
+  console.log(`📊 MEXC: ${exchangeData.mexc.connected ? '✅' : '❌'} | LBank: ${exchangeData.lbank.connected ? '✅' : '❌'} | CoinStore: ${exchangeData.coinstore.connected ? '✅' : '❌'} | Alerts: ${whaleWs && whaleWs.readyState === 1 ? '✅' : '❌'}`);
 }, 300000);
 
 const shutdown = (signal) => {
@@ -927,11 +793,6 @@ const shutdown = (signal) => {
   if (mexcPollingInterval) clearInterval(mexcPollingInterval);
   if (coinstoreWs) coinstoreWs.close();
   if (whaleWs) whaleWs.close();
-  
-  // Close LBank browser
-  if (lbankBrowser) {
-    closeLBankBrowser();
-  }
   
   bot.stop(signal);
   process.exit(0);
